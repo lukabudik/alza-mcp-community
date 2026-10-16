@@ -119,6 +119,31 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+/** Every Content-Type header value as sent. Node's `req.headers` keeps only the first
+ * duplicate, while the SDK's Web `Headers` (built from rawHeaders) joins them all. */
+function contentTypeValues(req: IncomingMessage): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    if (req.rawHeaders[i]?.toLowerCase() === "content-type") values.push(req.rawHeaders[i + 1] ?? "");
+  }
+  return values;
+}
+
+/** Read the JSON body within MAX_BODY_BYTES, or answer 413/400 and return null. */
+async function readJsonBodyOrReply(req: IncomingMessage, res: ServerResponse): Promise<{ body: unknown } | null> {
+  try {
+    return { body: await readJsonBody(req) };
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      res.setHeader("connection", "close");
+      jsonRpcError(res, 413, err.message);
+    } else {
+      jsonRpcError(res, 400, `Invalid request body: ${(err as Error).message}`);
+    }
+    return null;
+  }
+}
+
 /** Toolsets that only read public catalog data and never touch an account. */
 export const ANONYMOUS_TOOLSETS: ReadonlySet<string> = new Set(["catalog", "pc_builder"]);
 
@@ -211,16 +236,18 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
         s.open--;
         s.lastSeen = Date.now();
       });
+      // The SDK reads a POST body without a size limit, so read JSON bodies here.
+      // Anything else is left unread: the SDK answers it with 415 before reading.
+      // That split is only safe while both sides see the same Content-Type, so a
+      // repeated header (Node keeps the first, the SDK joins them) is refused.
       let body: unknown;
       if (req.method === "POST") {
-        try {
-          body = await readJsonBody(req);
-        } catch (err) {
-          if (err instanceof BodyTooLargeError) {
-            res.setHeader("connection", "close");
-            return jsonRpcError(res, 413, err.message);
-          }
-          return jsonRpcError(res, 400, `Invalid request body: ${(err as Error).message}`);
+        const contentTypes = contentTypeValues(req);
+        if (contentTypes.length > 1) return jsonRpcError(res, 400, "Duplicate Content-Type header");
+        if (contentTypes[0]?.includes("application/json")) {
+          const read = await readJsonBodyOrReply(req, res);
+          if (!read) return;
+          body = read.body;
         }
       }
       await s.transport.handleRequest(req, res, body);
@@ -232,16 +259,9 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
       res.setHeader("allow", "POST, GET, DELETE");
       return jsonRpcError(res, 405, `Method ${req.method} is not supported on ${path}; use POST to initialize a session`);
     }
-    let body: unknown;
-    try {
-      body = await readJsonBody(req);
-    } catch (err) {
-      if (err instanceof BodyTooLargeError) {
-        res.setHeader("connection", "close");
-        return jsonRpcError(res, 413, err.message);
-      }
-      return jsonRpcError(res, 400, `Invalid request body: ${(err as Error).message}`);
-    }
+    const read = await readJsonBodyOrReply(req, res);
+    if (!read) return;
+    const body = read.body;
     if (Array.isArray(body)) return jsonRpcError(res, 400, "JSON-RPC batches are not supported; send the initialize request on its own (not in an array)");
     if (!isInitializeRequest(body)) return jsonRpcError(res, 400, "Missing Mcp-Session-Id header (only an initialize request may omit it)");
     if (sessions.size >= maxSessions) return jsonRpcError(res, 503, "Too many concurrent sessions; try again later");

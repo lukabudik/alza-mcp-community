@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -55,6 +56,18 @@ async function toolNames(client: Client): Promise<string[]> {
 
 function text(res: unknown): string {
   return ((res as { content: { text: string }[] }).content[0]?.text) ?? "";
+}
+
+/** Raw HTTP/1.1 over a socket, for header shapes Node's client won't send (duplicates). */
+function rawSocketRequest(port: number, head: string, body: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = netConnect(port, "127.0.0.1");
+    let out = "";
+    sock.on("data", (d) => (out += d));
+    sock.on("error", reject);
+    sock.on("close", () => resolve(out));
+    sock.end(head + body);
+  });
 }
 
 function rawRequest(port: number, opts: { method: string; path: string; headers?: Record<string, string>; body?: string }) {
@@ -142,14 +155,18 @@ describe("Streamable HTTP transport (default: catalog only)", () => {
     expect(health.status).toBe(200);
     expect(JSON.parse(health.body)).toMatchObject({ ok: true, transport: "streamable-http", account: false });
     expect(server.sessionCount()).toBe(0);
+  });
 
-    // Initial request exceeding body limit is rejected with 413
+  it("rejects an oversized initialize request with 413", async () => {
+    const server = await start();
+    const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
     const oversized = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { pad: "x".repeat(4 * 1024 * 1024 + 100) } });
     const tooLargeInit = await rawRequest(server.port, { method: "POST", path: "/mcp", headers, body: oversized });
     expect(tooLargeInit.status).toBe(413);
+    expect(server.sessionCount()).toBe(0);
   });
 
-  it("enforces body size limit on existing-session requests", async () => {
+  it("enforces the body size limit on existing-session requests", async () => {
     const server = await start();
     const client = await connect(server);
     const sessionId = (client.transport as StreamableHTTPClientTransport).sessionId;
@@ -166,12 +183,45 @@ describe("Streamable HTTP transport (default: catalog only)", () => {
       method: "tools/list",
       params: { pad: "x".repeat(4 * 1024 * 1024 + 100) },
     });
-    const res = await rawRequest(server.port, { method: "POST", path: "/mcp", headers, body: oversized });
-    expect(res.status).toBe(413);
-    expect(JSON.parse(res.body)).toMatchObject({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: expect.stringMatching(/request body too large/i) },
+    const tooLarge = { jsonrpc: "2.0", error: { code: -32000, message: expect.stringMatching(/request body too large/i) } };
+    // With Content-Length (Node sets it for a single end(body)) and chunked: both are
+    // refused once the bytes read pass the limit.
+    const declared = await rawRequest(server.port, { method: "POST", path: "/mcp", headers, body: oversized });
+    expect(declared.status).toBe(413);
+    expect(JSON.parse(declared.body)).toMatchObject(tooLarge);
+    const chunked = await rawRequest(server.port, { method: "POST", path: "/mcp", headers: { ...headers, "transfer-encoding": "chunked" }, body: oversized });
+    expect(chunked.status).toBe(413);
+    expect(JSON.parse(chunked.body)).toMatchObject(tooLarge);
+  });
+
+  it("refuses a repeated Content-Type on a session POST instead of letting the SDK read the body unmetered", async () => {
+    // Node keeps the first Content-Type (text/plain: not read here) while the SDK joins
+    // them ("text/plain, application/json": parsed with no size limit).
+    const server = await start();
+    const client = await connect(server);
+    const sessionId = (client.transport as StreamableHTTPClientTransport).sessionId!;
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" });
+    const head =
+      "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+      "Content-Type: text/plain\r\nContent-Type: application/json\r\n" +
+      `Accept: application/json, text/event-stream\r\nMcp-Session-Id: ${sessionId}\r\n` +
+      `Content-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n`;
+    const res = await rawSocketRequest(server.port, head, body);
+    expect(res.split("\r\n")[0]).toMatch(/^HTTP\/1\.1 400 /);
+    expect(res).toMatch(/Duplicate Content-Type header/);
+  });
+
+  it("leaves a non-JSON session POST to the SDK (415)", async () => {
+    const server = await start();
+    const client = await connect(server);
+    const sessionId = (client.transport as StreamableHTTPClientTransport).sessionId!;
+    const res = await rawRequest(server.port, {
+      method: "POST",
+      path: "/mcp",
+      headers: { "content-type": "text/plain", accept: "application/json, text/event-stream", "mcp-session-id": sessionId },
+      body: "hello",
     });
+    expect(res.status).toBe(415);
   });
 
   it("enforces the session cap and releases a session on DELETE", async () => {
