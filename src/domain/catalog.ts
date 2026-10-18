@@ -1,11 +1,12 @@
 import type { Page } from "playwright";
 import { assertNotChallenged, assertPageOk, type AlzaBrowser } from "../infra/browser.js";
 import { TtlCache } from "../infra/cache.js";
-import { NotFoundError } from "../infra/errors.js";
+import { NotFoundError, UserError } from "../infra/errors.js";
 import { extractJsonLd, findProduct as findJsonLdProduct } from "../infra/jsonld.js";
+import { raceDeadline, TOOL_BUDGET_MS } from "../infra/deadline.js";
 import { log } from "../infra/logger.js";
 import type { AppliedRange, Category, CategoryFilters, FacetGroup, FacetValue, Product, ProductParam, SearchResult } from "./types.js";
-import { compareDeals, computeDeal, DEFAULT_DEAL_CATEGORIES, type Deal } from "./deals.js";
+import { compareDeals, DEFAULT_DEAL_CATEGORIES, parseDealCard, payablePrices, type Deal } from "./deals.js";
 import { availabilityFields, normalizeAvailability } from "./availability.js";
 import { commodityIdFromUrl } from "./reviews.js";
 
@@ -76,6 +77,15 @@ interface RawCard {
    * explicit stock attribute.
    */
   inStock: boolean | null;
+  /** Deal fields (see deals.ts `RawDealCard`; live-mapped on alza.sk 2026-10-13). */
+  couponCode: string | null;
+  couponPriceText: string | null;
+  alzaPlusPriceText: string | null;
+  memberText: string | null;
+  badgeText: string | null;
+  monthlyText: string | null;
+  /** `.avlVal` stock line, e.g. "Na sklade > 5 ks". */
+  availabilityText: string | null;
 }
 
 /**
@@ -113,6 +123,30 @@ export const CARD_EXTRACTOR_FN = `function(root) {
     // "Vybrať variant" = purchasable, standalone "Strážiť" = watch button.
     if (ctas.some(function(t) { return /Do košíku|Do košíka|Vybrat variantu|Vybrať variant/.test(t); })) inStock = true;
     else if (ctas.some(function(t) { return t === 'Hlídat' || t === 'Strážiť'; })) inStock = false;
+    // Coupon blocks (alza.sk 2026-10-13): '--discountcode' carries a promo code
+    // and the price with it ("Kúpiť s kódom ALZADNI15 88,32 €"); '--applus'
+    // carries the AlzaPlus+ member price with an empty code.
+    var couponCode = null, couponPriceText = null, alzaPlusPriceText = null;
+    Array.from(card.querySelectorAll('.coupon-block')).forEach(function(b) {
+      function bt(sel) {
+        var el = b.querySelector(sel);
+        var t = el ? el.textContent.trim().replace(/\\s+/g, ' ') : '';
+        return t || null;
+      }
+      if (/coupon-block--applus/.test(b.getAttribute('class') || '')) {
+        if (!alzaPlusPriceText) alzaPlusPriceText = bt('.coupon-block__price');
+      } else if (!couponCode && bt('.coupon-block__label--code')) {
+        couponCode = bt('.coupon-block__label--code');
+        couponPriceText = bt('.coupon-block__price');
+      }
+    });
+    // "-10 % s AlzaPlus+ 134,91 € Bez členstva: 149,90 €" box (product-page
+    // wording; on listing cards AlzaPlus+ is the '--applus' coupon block).
+    var memberEls = Array.from(card.querySelectorAll('div, span')).filter(function(e) {
+      var t = e.textContent || '';
+      return /AlzaPlus\\+/.test(t) && /Bez člen/.test(t);
+    });
+    var memberEl = memberEls.length ? memberEls[memberEls.length - 1] : null;
     return {
       code: card.getAttribute('data-code'),
       id: card.getAttribute('data-id'),
@@ -125,7 +159,14 @@ export const CARD_EXTRACTOR_FN = `function(root) {
       originalIsStrike: !!card.querySelector('.ads-pb__original-price--strike'),
       ratingText: ariaMatch ? ariaMatch[1] : (ratingMatch ? ratingMatch[1] : null),
       reviewCountText: ratingMatch ? ratingMatch[2].replace(/\\s|\\u00a0/g, '') : null,
-      inStock: inStock
+      inStock: inStock,
+      couponCode: couponCode,
+      couponPriceText: couponPriceText,
+      alzaPlusPriceText: alzaPlusPriceText,
+      memberText: memberEl ? memberEl.textContent.trim().replace(/\\s+/g, ' ') : null,
+      badgeText: txt('.ads-pb__header') || null,
+      monthlyText: txt('.ads-pb__footer') || null,
+      availabilityText: txt('.avlVal') || null
     };
   });
 }`;
@@ -150,7 +191,10 @@ const PAGE_URLS_EXTRACTOR = `(function() {
     var n = parseInt(m[1], 10);
     if (n < 2 || n > 50) continue;
     if (!/^\\d+$/.test(text) || parseInt(text, 10) !== n) continue;
-    out[String(n)] = href;
+    // Resolve against the page, not the site root: promotion listings live
+    // under a path (/monitory-23-a-24/alza-dni/18848792-e39.htm links
+    // "18848792-e39-p2.htm", alza.sk 2026-10-13).
+    out[String(n)] = new URL(href, location.href).href;
   }
   if (Object.keys(out).length === 0) return out;
   // derive page 1 from the -pN pattern: ".../18842920-p2.htm" -> ".../18842920.htm"
@@ -169,6 +213,13 @@ export const NO_RESULTS_PROBE = `(function() {
   var text = (document.body && document.body.innerText) || '';
   return /nena(š|s)(el|iel)\\b/i.test(text);
 })()`;
+
+/**
+ * Page cap for `get_deals` on one category/URL. Pages are followed until one
+ * adds no new products; an Alza dni listing of 44 items is 2 pages (alza.sk,
+ * 2026-10-13), a category page holds ~24 cards.
+ */
+const DEAL_MAX_PAGES = 4;
 
 /** Public `get_product` cap on spec rows (unchanged contract). */
 const PRODUCT_PARAMS_CAP = 30;
@@ -215,6 +266,11 @@ const PRODUCT_PAGE_EXTRACTOR = `(function() {
       var t = el ? (el.textContent || '').replace(/\\u00a0/g, ' ').trim().replace(/\\s+/g, ' ') : '';
       return t || null;
     })(),
+    // Promo-code price block ("Kúpiť s kódom ALZADNI15 88,32 €"; alza.sk 2026-10-14)
+    // next to the shelf price box. Server-rendered on the product page.
+    promoCode: (function() { var e = document.querySelector('.promo-action-prices__discount-code'); return e ? (e.textContent || '').trim() || null : null; })(),
+    promoPriceText: (function() { var e = document.querySelector('.promo-action-prices__price'); return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() || null : null; })(),
+    shelfPriceText: (function() { var e = document.querySelector('.js-price-box__primary-price__value'); return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() || null : null; })(),
     params: Array.from(document.querySelectorAll('.paramTbl tr, table.paramTbl tr, .productSpecBox tr')).slice(0, ${PRODUCT_PARAMS_SCRAPE_CAP}).map(function(tr) {
       var th = tr.querySelector('th'), td = tr.querySelector('td');
       return { name: th ? th.textContent.trim().replace(/\\s+/g,' ') : '', value: td ? td.textContent.trim().replace(/\\s+/g,' ') : '' };
@@ -232,7 +288,9 @@ export class Catalog {
   private readonly productUrlCache = new TtlCache<string, string>(60 * 60 * 1000);
   private readonly categoryCache = new TtlCache<number, Category[]>(24 * 60 * 60 * 1000);
 
-  private readonly dealsCache = new TtlCache<string, { scanned: number; deals: Deal[] }>(5 * 60 * 1000);
+  private readonly dealsCache = new TtlCache<string, { scanned: number; pages: number; partial?: boolean; deals: Deal[]; usedOffers: Deal[] }>(5 * 60 * 1000);
+  /** Listing pages already read by `get_deals`, so a retry after a time-budget cut-off only loads what is missing. */
+  private readonly dealPageCache = new TtlCache<string, { cards: RawCard[]; pageUrls: Record<string, string> }>(5 * 60 * 1000);
 
   constructor(private readonly browser: AlzaBrowser) {}
 
@@ -560,50 +618,129 @@ export class Catalog {
   }
 
   /**
-   * Discounted products from category listing pages (`/{id}.htm`). Discount
-   * % is computed from the observed current/original prices (see deals.ts).
-   * CZ-only. Without `categoryId`, scans page 1 of a fixed set of popular
-   * leaf categories; with it, up to 3 pages of that category.
+   * Discounted products from listing pages: a category (`/{id}.htm`) or any
+   * listing URL on the configured storefront, e.g. an Alza dni promotion
+   * (`/monitory-23-a-24/alza-dni/18848792-e39.htm`). Prices, promo codes and
+   * AlzaPlus+ prices are parsed from the cards (see deals.ts). alza.cz and
+   * alza.sk only. Without a category or URL, scans page 1 of a fixed set of
+   * popular leaf categories; with one, follows its page links until a page
+   * adds no new products (at most DEAL_MAX_PAGES pages).
    */
-  async getDeals(opts: { categoryId?: number; minDiscountPercent?: number; limit?: number }): Promise<{
+  async getDeals(opts: { categoryId?: number; url?: string; minDiscountPercent?: number; limit?: number }): Promise<{
     categoryIds: number[];
+    url?: string;
     candidatesScanned: number;
+    pagesScanned: number;
+    /** True when the time budget ran out before every page was read; a retry reuses the pages already loaded. */
+    partial?: boolean;
     deals: Deal[];
+    /** Opened-box / used offers: a compromise on condition, so kept out of `deals` and their ranking. */
+    usedOffers: Deal[];
   }> {
-    if (this.browser.locale.countryCode !== "CZ") {
-      throw new Error("get_deals is CZ-only: it parses alza.cz's Czech price boxes ('N,-', 'Ušetříte'). Set ALZA_BASE_URL=https://www.alza.cz.");
+    const { countryCode, currency } = this.browser.locale;
+    if (countryCode !== "CZ" && countryCode !== "SK") {
+      throw new Error(`get_deals supports alza.cz and alza.sk price boxes only (this server is set to ${this.browser.locale.baseUrl}).`);
     }
+    if (opts.categoryId && opts.url) throw new UserError("Pass either category_id or url, not both.");
     const limit = clamp(opts.limit ?? 20, 1, 50);
     const min = opts.minDiscountPercent ?? 0;
-    const categoryIds = opts.categoryId ? [opts.categoryId] : DEFAULT_DEAL_CATEGORIES.map((c) => c.id);
-    const pagesPerCategory = opts.categoryId ? 3 : 1;
-    const cacheKey = JSON.stringify({ categoryIds, pagesPerCategory });
-    const all = await this.dealsCache.memoize(cacheKey, async () => {
-      const deals: Deal[] = [];
-      const seen = new Set<string>();
-      let scanned = 0;
-      for (const id of categoryIds) {
-        let target: string | undefined = `/${id}.htm`;
-        for (let n = 1; n <= pagesPerCategory && target; n++) {
-          const { cards, pageUrls } = await this.fetchSearchPage({ query: "" }, target);
-          for (const c of cards) {
-            const product = this.normalizeCard(c);
-            if (!product || seen.has(product.code)) continue;
-            seen.add(product.code);
-            scanned++;
-            const d = computeDeal(c);
-            if (d) deals.push({ ...product, ...d });
-          }
-          target = pageUrls[String(n + 1)];
-        }
-      }
-      return { scanned, deals };
-    });
+    const url = opts.url ? this.dealListingUrl(opts.url) : undefined;
+    const urlCategoryId = url ? Number(new URL(url).pathname.match(/\/(\d+)(?:-[a-z]+\d*)*\.htm$/)?.[1]) : NaN;
+    const categoryIds = url
+      ? (Number.isFinite(urlCategoryId) ? [urlCategoryId] : [])
+      : opts.categoryId ? [opts.categoryId] : DEFAULT_DEAL_CATEGORIES.map((c) => c.id);
+    const starts = url ? [url] : categoryIds.map((id) => `/${id}.htm`);
+    const maxPages = url || opts.categoryId ? DEAL_MAX_PAGES : 1;
+    const cacheKey = JSON.stringify({ starts, maxPages });
+    const finished = this.dealsCache.get(cacheKey);
+    const all = finished ?? (await this.scanDeals(starts, maxPages, currency));
+    if (!finished && !all.partial) this.dealsCache.set(cacheKey, all);
     const deals = all.deals
       .filter((d) => d.discountPercent >= min)
       .sort(compareDeals)
       .slice(0, limit);
-    return { categoryIds, candidatesScanned: all.scanned, deals };
+    const usedOffers = all.usedOffers.slice().sort((a, b) => a.priceNow - b.priceNow).slice(0, 10);
+    return { categoryIds, ...(url ? { url } : {}), candidatesScanned: all.scanned, pagesScanned: all.pages, ...(all.partial ? { partial: true } : {}), deals, usedOffers };
+  }
+
+  /**
+   * Reads the start page of each listing, then its further pages in parallel
+   * (at most DEAL_MAX_PAGES - 1 at once), within TOOL_BUDGET_MS. Pages that
+   * miss the budget are skipped and flagged as `partial`; they keep loading in
+   * the background and fill `dealPageCache` for the retry.
+   */
+  private async scanDeals(starts: string[], maxPages: number, currency: string): Promise<{ scanned: number; pages: number; partial?: boolean; deals: Deal[]; usedOffers: Deal[] }> {
+    const deadline = Date.now() + TOOL_BUDGET_MS;
+    const deals: Deal[] = [];
+    const usedOffers: Deal[] = [];
+    const seen = new Set<string>();
+    let scanned = 0;
+    let pages = 0;
+    let partial = false;
+    const page = (target: string) => this.dealPageCache.memoize(target, () => this.fetchSearchPage({ query: "" }, target));
+    const ingest = (cards: RawCard[]): void => {
+      for (const c of cards) {
+        const product = this.normalizeCard(c);
+        if (!product) continue;
+        // An opened-box item can share its code with the new one: key on both.
+        const key = `${product.code}|${product.condition ?? "new"}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        scanned++;
+        const d = parseDealCard(c, currency);
+        if (!d) continue;
+        const reviewCount = c.reviewCountText ? Number(c.reviewCountText) : undefined;
+        const entry = {
+          ...product,
+          ...(c.availabilityText ? { availabilityText: c.availabilityText } : {}),
+          ...(reviewCount !== undefined && Number.isFinite(reviewCount) ? { reviewCount } : {}),
+          ...d,
+        } as Deal;
+        (d.condition ? usedOffers : deals).push(entry);
+      }
+    };
+    for (const start of starts) {
+      const first = await raceDeadline(page(start), deadline);
+      if ("timedOut" in first) {
+        partial = true;
+        break;
+      }
+      pages++;
+      ingest(first.value.cards);
+      if (first.value.cards.length === 0) continue;
+      const more: string[] = [];
+      for (let n = 2; n <= maxPages; n++) {
+        const href = first.value.pageUrls[String(n)];
+        if (href) more.push(href);
+      }
+      const rest = await Promise.all(more.map((target) => raceDeadline(page(target), deadline)));
+      for (const r of rest) {
+        if ("timedOut" in r) {
+          partial = true;
+          continue;
+        }
+        pages++;
+        ingest(r.value.cards);
+      }
+    }
+    return { scanned, pages, ...(partial ? { partial } : {}), deals, usedOffers };
+  }
+
+  /** A listing URL on this storefront, reduced to origin + path (no query, no #f&cud=… hash). */
+  private dealListingUrl(raw: string): string {
+    let u: URL;
+    try {
+      u = new URL(raw.trim(), this.browser.locale.baseUrl);
+    } catch {
+      throw new UserError("url must be an Alza listing URL, e.g. https://www.alza.sk/monitory-23-a-24/alza-dni/18848792-e39.htm");
+    }
+    const base = new URL(this.browser.locale.baseUrl);
+    if (u.protocol !== "https:" || u.host !== base.host || u.username || u.password) {
+      throw new UserError(`url must be on the configured storefront ${base.origin} (ALZA_BASE_URL); got ${u.protocol}//${u.host}`);
+    }
+    if (!/\.htm$/.test(u.pathname)) throw new UserError("url must be a listing page ending in .htm, e.g. /monitory-23-a-24/alza-dni/18848792-e39.htm");
+    // Page 1 of the listing: "-p2.htm" -> ".htm".
+    return `${u.origin}${u.pathname.replace(/-p\d+\.htm$/, ".htm")}`;
   }
 
   private readonly categoryExistsCache = new TtlCache<number, true>(60 * 60 * 1000);
@@ -794,6 +931,14 @@ export class Catalog {
         image: images[0],
         price: offers.price,
         currency: offers.priceCurrency ?? this.browser.locale.currency,
+        ...payablePrices({
+          availabilityText: data.availabilityText,
+          priceText: data.shelfPriceText ?? (offers.price !== undefined ? `${offers.price} €` : null),
+          originalPriceText: null,
+          originalIsStrike: false,
+          couponCode: data.promoCode,
+          couponPriceText: data.promoPriceText,
+        }),
         ...availabilityFields(data.availabilityText || offers.availability),
         ...jsonLdConflict(data.availabilityText, offers.availability),
         rating: rating.average,
@@ -970,6 +1115,7 @@ export class Catalog {
       availability:
         c.inStock === null ? undefined : c.inStock ? "in stock" : "not purchasable now",
       rating: c.ratingText ? Number(c.ratingText.replace(",", ".")) : undefined,
+      ...payablePrices(c),
     };
   }
 
@@ -986,6 +1132,9 @@ interface ProductPageData {
   product: Record<string, unknown> | null;
   breadcrumb: Record<string, unknown> | null;
   availabilityText?: string | null;
+  promoCode?: string | null;
+  promoPriceText?: string | null;
+  shelfPriceText?: string | null;
   params: Array<{ name: string; value: string }>;
 }
 

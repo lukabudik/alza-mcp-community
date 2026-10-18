@@ -10,6 +10,26 @@ export interface Product {
   price?: number;
   /** Original / strike-through price, if discounted. */
   originalPrice?: number;
+  /**
+   * Lowest price a buyer can pay without a membership, when the listing card
+   * carries a promo code ("Kúpiť s kódom ALZADNI15"): `price` is then the shelf
+   * price and `priceNow` the price with the code. Absent when there is no code.
+   */
+  priceNow?: number;
+  /** The promo code behind `priceNow`, e.g. "ALZADNI15". */
+  promoCode?: string;
+  /** The code's percent (its trailing number), e.g. 15. */
+  promoPercent?: number;
+  /** AlzaPlus+ member price from the card's AlzaPlus+ box, when shown. */
+  alzaPlusPrice?: number;
+  /**
+   * Set only for previously sold goods: "opened" (Rozbalené, opened box) or
+   * "used" (Zánovné/Použité). Absent for new goods. Their price is a compromise
+   * on condition, so it must not be compared with new goods' prices.
+   */
+  condition?: "opened" | "used";
+  /** For `condition` goods: the price of the same product new ("Nový 165 €" on the card). */
+  newPrice?: number;
   currency: string;
   /**
    * Normalised stock label shared by every tool (see availability.ts): "in

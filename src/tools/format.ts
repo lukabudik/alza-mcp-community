@@ -5,10 +5,23 @@ export function formatPrice(price: number | undefined, currency: string): string
   return `${price.toLocaleString("cs-CZ")} ${currency}`;
 }
 
+/** "OPENED BOX" / "USED" tag for previously sold goods; empty for new goods. */
+export function conditionTag(p: Pick<Product, "condition" | "newPrice" | "currency">): string {
+  if (!p.condition) return "";
+  const label = p.condition === "opened" ? "OPENED BOX (previously sold, not new)" : "USED (previously sold, not new)";
+  return p.newPrice !== undefined ? `${label}, new: ${formatPrice(p.newPrice, p.currency)}` : label;
+}
+
 export function formatProductLine(p: Product): string {
   const parts = [`**${p.name}**`];
   parts.push(`code: \`${p.code}\``);
-  if (p.price !== undefined) parts.push(`${formatPrice(p.price, p.currency)}`);
+  if (p.condition) parts.push(`⚠ ${conditionTag(p)}`);
+  if (p.priceNow !== undefined && p.promoCode) {
+    parts.push(`**${formatPrice(p.priceNow, p.currency)}** with code ${p.promoCode} (shelf ${formatPrice(p.price, p.currency)})`);
+  } else if (p.price !== undefined) {
+    parts.push(`${formatPrice(p.price, p.currency)}`);
+  }
+  if (p.alzaPlusPrice !== undefined) parts.push(`AlzaPlus+ ${formatPrice(p.alzaPlusPrice, p.currency)}`);
   if (p.availability) parts.push(p.availability);
   if (p.rating !== undefined) parts.push(`★ ${p.rating.toFixed(1)}`);
   return `- ${parts.join(" · ")}\n  ${p.url}`;
@@ -37,6 +50,7 @@ export function formatSearchResult(res: SearchResult): string {
 
 export function formatProduct(p: Product): string {
   const lines: string[] = [`# ${p.name}`, ``, `Code: \`${p.code}\``, `URL: ${p.url}`];
+  if (p.condition) lines.push(`Condition: ⚠ ${conditionTag(p)} — a compromise on condition; do not rank it against new goods, but it may be a bargain`);
   if (p.price !== undefined) {
     let line = `Price: **${formatPrice(p.price, p.currency)}**`;
     if (p.originalPrice && p.originalPrice > p.price) {
@@ -45,6 +59,10 @@ export function formatProduct(p: Product): string {
     }
     lines.push(line);
   }
+  if (p.priceNow !== undefined && p.promoCode) {
+    lines.push(`Lowest price you can pay: **${formatPrice(p.priceNow, p.currency)}** with code ${p.promoCode}${p.promoPercent ? ` (-${p.promoPercent} %)` : ""}; the price above is the shelf price`);
+  }
+  if (p.alzaPlusPrice !== undefined) lines.push(`AlzaPlus+ member price: ${formatPrice(p.alzaPlusPrice, p.currency)}`);
   if (p.availability) lines.push(`Availability: ${p.availability}${p.availabilityText ? ` (${p.availabilityText})` : ""}${p.jsonLdAvailability ? ` [structured data says: ${p.jsonLdAvailability}]` : ""}`);
   if (p.rating !== undefined) lines.push(`Rating: ★ ${p.rating.toFixed(1)} / 5`);
   if (p.brand) lines.push(`Brand: ${p.brand}`);

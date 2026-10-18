@@ -260,6 +260,12 @@ const PRODUCT = z
     image: z.string().optional(),
     price: z.number().optional(),
     originalPrice: z.number().optional(),
+    priceNow: z.number().optional(),
+    promoCode: z.string().optional(),
+    promoPercent: z.number().optional(),
+    alzaPlusPrice: z.number().optional(),
+    condition: z.enum(["opened", "used"]).optional(),
+    newPrice: z.number().optional(),
     currency: z.string(),
     availability: z.string().optional(),
     availabilityText: z.string().optional(),
@@ -303,19 +309,36 @@ export const SEARCH_PRODUCTS_OUTPUT = z
   })
   .passthrough();
 
+const DEAL = PRODUCT.extend({
+  price: z.number(),
+  originalPrice: z.number().optional(),
+  savings: z.number().optional(),
+  discountPercent: z.number(),
+  priceNow: z.number(),
+  priceList: z.number(),
+  priceOriginal: z.number().nullable(),
+  promoCode: z.string().nullable(),
+  promoPercent: z.number().nullable(),
+  badge: z.string().nullable(),
+  monthlyFrom: z.number().nullable(),
+  alzaPlusPrice: z.number().nullable(),
+  nonMemberPrice: z.number().nullable(),
+  condition: z.enum(["opened", "used"]).nullable(),
+  newPrice: z.number().nullable(),
+  priceCheck: z.object({ expected: z.number(), ok: z.boolean() }).nullable(),
+  reviewCount: z.number().optional(),
+});
+
 export const GET_DEALS_OUTPUT = z
   .object({
     categoryIds: z.array(z.number()),
+    url: z.string().optional(),
     candidatesScanned: z.number(),
+    pagesScanned: z.number(),
+    partial: z.boolean().optional(),
     total: z.number(),
-    deals: z.array(
-      PRODUCT.extend({
-        price: z.number(),
-        originalPrice: z.number(),
-        savings: z.number(),
-        discountPercent: z.number(),
-      }),
-    ),
+    deals: z.array(DEAL),
+    usedOffers: z.array(DEAL).optional(),
   })
   .passthrough();
 

@@ -98,9 +98,9 @@ describe("Catalog.getDeals", () => {
     expect((browser as unknown as { visited: string[] }).visited.length).toBe(5);
   });
 
-  it("is explicitly CZ-scoped", async () => {
-    const catalog = new Catalog(fakeBrowser("https://www.alza.sk"));
-    await expect(catalog.getDeals({ categoryId: 1 })).rejects.toThrow(/CZ-only/);
+  it("is scoped to the storefronts whose price boxes it reads (CZ, SK)", async () => {
+    const catalog = new Catalog(fakeBrowser("https://www.alza.de"));
+    await expect(catalog.getDeals({ categoryId: 1 })).rejects.toThrow(/alza\.cz and alza\.sk/);
   });
 
   it("formats deals with the computed discount", () => {
@@ -120,4 +120,14 @@ const FIXTURE_DEAL = {
   originalPrice: 15390,
   savings: 2900,
   discountPercent: 18.8,
+  priceNow: 12490,
+  priceList: 12490,
+  priceOriginal: 15390,
+  promoCode: null,
+  promoPercent: null,
+  badge: null,
+  monthlyFrom: null,
+  alzaPlusPrice: null,
+  nonMemberPrice: null,
+  priceCheck: null,
 };
