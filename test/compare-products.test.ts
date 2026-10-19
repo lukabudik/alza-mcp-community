@@ -98,7 +98,7 @@ describe("formatComparisonMarkdown", () => {
     const cols = (l: string) => l.replace(/\\\|/g, "").split("|").length;
     for (const l of tableLines) expect(cols(l)).toBe(cols(tableLines[0]!));
     expect(md).toContain("IPS \\| matný");
-    expect(md).toContain("| Spec | Product AAA1 (AAA1) | BAD (error) | Product BBB2 (BBB2) |");
+    expect(md).toContain("| Spec | [Product AAA1](https://www.alza.cz/AAA1) (AAA1) | BAD (error) | [Product BBB2](https://www.alza.cz/BBB2) (BBB2) |");
     expect(md).toContain("- BAD: product BAD not found");
     expect(md).toContain("- AAA1: https://www.alza.cz/AAA1");
   });
@@ -220,7 +220,7 @@ describe("compare_products tool (in-memory client)", () => {
       expect(seen!.maxTokens).toBe(SUMMARY_MAX_TOKENS);
       expect(seen!.includeContext).toBe("none");
       expect(seen!.systemPrompt).toMatch(/ONLY the data/);
-      expect(seen!.messages[0]!.content.text).toContain("| Spec | Product AAA1 (AAA1) | Product BBB2 (BBB2) |");
+      expect(seen!.messages[0]!.content.text).toMatch(/\| Spec \| \[Product AAA1\]\(https:\/\/www\.alza\.cz\/AAA1[^)]*\) \(AAA1\) \| \[Product BBB2\]\(https:\/\/www\.alza\.cz\/BBB2[^)]*\) \(BBB2\) \|/);
       const text = (res.content as Array<{ text: string }>)[0]!.text;
       expect(text).toContain("BBB2 is 1000 CZK cheaper");
     } finally {

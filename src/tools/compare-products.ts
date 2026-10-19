@@ -5,10 +5,11 @@ import type { Product } from "../domain/types.js";
 import { OUTPUT_SCHEMAS } from "./output-schemas.js";
 import type { RegisterableTool, ToolDeps } from "./types.js";
 import { tagLinks } from "./tracking.js";
-import { formatPrice as formatMoney } from "./format.js";
+import { raceDeadline, TOOL_BUDGET_MS } from "../infra/deadline.js";
+import { conditionTag, formatPrice as formatMoney } from "./format.js";
 
 /** Product-page loads run at most this many at a time (issue #11: 2–3, polite to Cloudflare). */
-export const COMPARE_CONCURRENCY = 2;
+export const COMPARE_CONCURRENCY = 3;
 export const COMPARE_MIN_CODES = 2;
 export const COMPARE_MAX_CODES = 6;
 /** Upper bound on the sampled verdict (issue #18: bounded `maxTokens`). */
@@ -45,6 +46,8 @@ export const FIXED_ROWS = ["Price", "Availability", "Rating", "Brand"] as const;
 function formatPrice(p: Product): string | null {
   if (p.price === undefined) return null;
   const base = formatMoney(p.price, p.currency);
+  if (p.condition) return `${base} ⚠ ${conditionTag(p)}${p.priceNow !== undefined && p.promoCode ? `; ${formatMoney(p.priceNow, p.currency)} with code ${p.promoCode}` : ""}`;
+  if (p.priceNow !== undefined && p.promoCode) return `**${formatMoney(p.priceNow, p.currency)}** with code ${p.promoCode} (shelf ${base})`;
   return p.originalPrice !== undefined && p.originalPrice > p.price ? `${base} (was ${formatMoney(p.originalPrice, p.currency)})` : base;
 }
 
@@ -107,7 +110,7 @@ export function formatComparisonMarkdown(table: ComparisonTable): string {
   const ok = table.products.filter((p) => p.ok);
   const lines: string[] = [];
   if (ok.length > 0) {
-    const header = ["Spec", ...table.products.map((p) => cell(p.ok ? `${p.name ?? p.code} (${p.code})` : `${p.code} (error)`))];
+    const header = ["Spec", ...table.products.map((p) => cell(p.ok ? (p.url ? `[${p.name ?? p.code}](${p.url}) (${p.code})` : `${p.name ?? p.code} (${p.code})`) : `${p.code} (error)`))];
     lines.push(`| ${header.join(" | ")} |`);
     lines.push(`|${header.map(() => "---").join("|")}|`);
     for (const row of table.rows) {
@@ -269,9 +272,15 @@ export function createCompareProductsTool(deps: ToolDeps): RegisterableTool {
                 `compare_products needs at least ${COMPARE_MIN_CODES} distinct product codes, but only ${codes.length} remained after removing duplicates (${duplicates.join(", ") || "none"}). Pass different codes.`
               );
             }
+            // Hosts give up on a tool call after ~60 s: report products that do not
+            // finish in time instead of failing the whole call. They keep loading
+            // into the product cache, so a retry with the same codes is fast.
+            const deadline = Date.now() + TOOL_BUDGET_MS;
             const entries = await mapWithConcurrency(codes, COMPARE_CONCURRENCY, async (code): Promise<CompareEntry> => {
               try {
-                return { code, product: tagLinks(await deps.catalog.getProduct(code)) };
+                const got = await raceDeadline(deps.catalog.getProduct(code), deadline);
+                if ("timedOut" in got) return { code, error: "not loaded within the time budget — call compare_products again with the same codes (loaded pages are cached), or compare fewer products at once" };
+                return { code, product: tagLinks(got.value) };
               } catch (err) {
                 return { code, error: err instanceof Error ? err.message : String(err) };
               }
