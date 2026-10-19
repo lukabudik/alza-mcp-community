@@ -42,9 +42,23 @@ function log(msg) {
 // — including the OAuth endpoints — falls back to plain fetch, which Alza's edge
 // answers with a 403 challenge. Best-effort by design: ensure-cf-venv.sh exits 0
 // when python3 is absent, and the server degrades to the browser transport.
-// Needs bash (Linux/macOS/WSL/Git Bash); on plain Windows it is skipped with a note.
+// On Windows it runs the Node-only `--setup-cf` instead: `bash` there is often
+// WSL's, which mangles the backslash path and would build a Linux venv anyway.
 const ensureVenv = path.join(__dirname, "ensure-cf-venv.sh");
-if (!skipVenv && fs.existsSync(ensureVenv)) {
+const cli = path.join(__dirname, "..", "dist", "index.js");
+if (!skipVenv && process.platform === "win32") {
+  if (fs.existsSync(cli)) {
+    log("setting up the Chrome-fingerprint transport venv (curl_cffi) …");
+    const venv = spawnSync(process.execPath, [cli, "--setup-cf"], { stdio: "inherit" });
+    if (venv.error) {
+      log("cf-venv setup skipped (" + venv.error.message + "); the server will fall back to the browser transport.");
+    } else if (venv.status !== 0) {
+      log("cf-venv setup exited with code " + venv.status + "; the server will fall back to the browser transport.");
+    }
+  } else {
+    log("cf-venv setup skipped (dist/index.js not built); run `alza-mcp-community --setup-cf` after building.");
+  }
+} else if (!skipVenv && fs.existsSync(ensureVenv)) {
   log("setting up the Chrome-fingerprint transport venv (curl_cffi) …");
   const venv = spawnSync("bash", [ensureVenv], { stdio: "inherit" });
   if (venv.error) {

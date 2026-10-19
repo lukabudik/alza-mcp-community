@@ -10,14 +10,20 @@ import { candidatePythons } from "../src/infra/impersonate-transport.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = path.join(root, "scripts");
 
-/** A fake package: <tmp>/[node_modules/alza-mcp-community/]scripts with the real postinstall and a stub venv script. */
+/** A fake package: <tmp>/[node_modules/alza-mcp-community/]scripts with the real postinstall, plus a stub
+ * venv script and a stub CLI that each write which of them ran into `marker`. */
 function fakePackage(underNodeModules: boolean) {
   const base = mkdtempSync(path.join(tmpdir(), "alza-pkg-"));
   const pkg = underNodeModules ? path.join(base, "node_modules", "alza-mcp-community") : path.join(base, "alza-mcp-community");
   mkdirSync(path.join(pkg, "scripts"), { recursive: true });
+  mkdirSync(path.join(pkg, "dist"));
   copyFileSync(path.join(scripts, "postinstall.cjs"), path.join(pkg, "scripts", "postinstall.cjs"));
   const marker = path.join(pkg, "venv-ran");
-  writeFileSync(path.join(pkg, "scripts", "ensure-cf-venv.sh"), `#!/usr/bin/env bash\ntouch "${marker}"\n`, { mode: 0o755 });
+  writeFileSync(path.join(pkg, "scripts", "ensure-cf-venv.sh"), `#!/usr/bin/env bash\necho bash > "$(dirname "$0")/../venv-ran"\n`, { mode: 0o755 });
+  writeFileSync(
+    path.join(pkg, "dist", "index.js"),
+    `if (process.argv.includes("--setup-cf")) require("node:fs").writeFileSync(${JSON.stringify(marker)}, "cli\\n");\n`
+  );
   return { pkg, marker };
 }
 
@@ -45,6 +51,13 @@ describe("postinstall skip rules", () => {
       expect(run.status).toBe(0);
       expect(existsSync(marker), flag).toBe(true);
     }
+  });
+
+  it("sets up the venv with the Node CLI on Windows and with bash elsewhere", () => {
+    const { pkg, marker } = fakePackage(true);
+    const run = runPostinstall(pkg, { ALZA_MCP_SKIP_INSTALL: "1" });
+    expect(run.status).toBe(0);
+    expect(readFileSync(marker, "utf8").trim()).toBe(process.platform === "win32" ? "cli" : "bash");
   });
 
   it("ALZA_MCP_SKIP_VENV=1 skips the venv", () => {
