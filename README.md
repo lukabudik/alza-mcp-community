@@ -285,6 +285,8 @@ On HTTP the server is stricter than on stdio, because a network endpoint can be 
 | `ALZA_HTTP_ALLOW_TOKEN_FILE` | off | Also load `ALZA_TOKEN_FILE` into every session (single-user only; needs `ALZA_HTTP_ENABLE_ACCOUNT`) |
 | `ALZA_HTTP_MAX_SESSIONS` | `50` | Concurrent session cap (HTTP 503 beyond it) |
 | `ALZA_HTTP_SESSION_IDLE_MS` | `1800000` | Close a session after this long without a request (a session holding an open GET/SSE stream is not closed) |
+| `ALZA_HTTP_REQUEST_TIMEOUT_MS` | `30000` | Time a client has to send a whole request (headers get half); HTTP 408 beyond it. Responses, including tool calls and GET/SSE streams, are not limited |
+| `ALZA_HTTP_MAX_CONNECTIONS` | `256` | Open TCP connection cap (SSE streams count); connections over it are dropped |
 
 **Hosting is not supported yet.** A hosted endpoint (Vercel `mcp-handler`, Fly, Railway, …) is a follow-up. The main obstacle is Cloudflare, not the transport: Alza is behind Cloudflare Bot Management, and both the headless browser and the `curl_cffi` sidecar get through it from a residential IP (live-verified) but are far more likely to be challenged from a datacenter IP. A hosted instance will probably need a residential proxy (`ALZA_PROXY_URL`) or a browser-as-a-service (for example Browserbase via `ALZA_CDP_URL`). The daily canary's GitHub-hosted runs show this: they get Cloudflare's interactive challenge. Other things a host needs: Chromium and Python with `curl_cffi` in the image, enough memory for one browser per account session, sticky routing (sessions live in one process's memory), and authentication in front of the endpoint. Keep the account toolsets locked on any multi-user host.
 

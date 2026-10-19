@@ -86,6 +86,10 @@ describe("parseCliConfig", () => {
   it("defaults to stdio", () => {
     expect(parseCliConfig([], {}).transport).toBe("stdio");
   });
+  it("reads the request timeout and connection cap from the environment", () => {
+    expect(parseCliConfig(["--http"], { ALZA_HTTP_REQUEST_TIMEOUT_MS: "5000", ALZA_HTTP_MAX_CONNECTIONS: "64" }).http).toMatchObject({ requestTimeoutMs: 5000, maxConnections: 64 });
+    expect(parseCliConfig(["--http"], { ALZA_HTTP_REQUEST_TIMEOUT_MS: "nope", ALZA_HTTP_MAX_CONNECTIONS: "0" }).http).toMatchObject({ requestTimeoutMs: undefined, maxConnections: undefined });
+  });
   it("accepts --http [--port N] and ALZA_TRANSPORT=http", () => {
     expect(parseCliConfig(["--http", "--port", "8123"], {})).toMatchObject({ transport: "http", http: { port: 8123 } });
     expect(parseCliConfig(["--http", "--port=0", "--host=0.0.0.0"], {})).toMatchObject({ http: { port: 0, host: "0.0.0.0" } });
@@ -246,6 +250,84 @@ describe("Streamable HTTP transport (default: catalog only)", () => {
     await new Promise((r) => setTimeout(r, 2_300));
     expect(server.sessionCount()).toBe(0);
   }, 10_000);
+});
+
+describe("Streamable HTTP transport resource limits", () => {
+  const initBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "raw", version: "0" } } });
+  const initHead = (length: number) =>
+    "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n" +
+    `Accept: application/json, text/event-stream\r\nContent-Length: ${length}\r\n\r\n`;
+
+  /** A socket that sent `data` and collects whatever comes back until the server closes it. */
+  function openSocket(port: number, data: string) {
+    const sock = netConnect(port, "127.0.0.1");
+    let out = "";
+    sock.on("data", (d) => (out += d));
+    sock.on("error", () => {});
+    const closed = new Promise<string>((resolve) => sock.on("close", () => resolve(out)));
+    sock.write(data);
+    return { sock, closed };
+  }
+
+  it("answers 408 and closes a request whose body stalls past requestTimeoutMs", async () => {
+    const server = await start({ requestTimeoutMs: 400 });
+    // Declares the whole initialize body but sends half of it, then goes quiet.
+    const { closed } = openSocket(server.port, initHead(Buffer.byteLength(initBody)) + initBody.slice(0, 20));
+    const started = Date.now();
+    const out = await closed;
+    expect(out.split("\r\n")[0]).toMatch(/^HTTP\/1\.1 408 /);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(server.sessionCount()).toBe(0);
+  });
+
+  it("does not time out responses: a session keeps its GET/SSE stream and answers calls past requestTimeoutMs", async () => {
+    const server = await start({ requestTimeoutMs: 300 });
+    const client = await connect(server); // opens a standalone GET SSE stream after initialize
+    await new Promise((r) => setTimeout(r, 1_500));
+    expect(server.sessionCount()).toBe(1);
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+  }, 10_000);
+
+  it("answers 503 (after draining) once maxConcurrentBodyReads bodies are being read", async () => {
+    const server = await start({ maxConcurrentBodyReads: 1 });
+    // Holds the only read slot: headers plus part of a declared body.
+    const holder = openSocket(server.port, initHead(Buffer.byteLength(initBody)) + initBody.slice(0, 20));
+    await new Promise((r) => setTimeout(r, 100));
+    const busy = await rawRequest(server.port, {
+      method: "POST",
+      path: "/mcp",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: initBody,
+    });
+    expect(busy.status).toBe(503);
+    expect(JSON.parse(busy.body)).toMatchObject({ error: { message: expect.stringMatching(/busy/i) } });
+    // The slot frees once the first body completes: that initialize goes through.
+    holder.sock.end(initBody.slice(20));
+    expect((await holder.closed).split("\r\n")[0]).toMatch(/^HTTP\/1\.1 200 /);
+  });
+
+  it("does not echo the client's input in the invalid-body error", async () => {
+    const server = await start();
+    const res = await rawRequest(server.port, {
+      method: "POST",
+      path: "/mcp",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: '{"secret-marker": ',
+    });
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ error: { message: "Invalid request body: expected a JSON-RPC message" } });
+    expect(res.body).not.toMatch(/secret-marker/);
+  });
+
+  it("caps open connections at maxConnections", async () => {
+    const server = await start({ maxConnections: 1 });
+    const first = openSocket(server.port, "");
+    await new Promise((r) => setTimeout(r, 100));
+    const second = openSocket(server.port, "");
+    // Node drops a connection over the cap right away.
+    await expect(Promise.race([second.closed.then(() => "closed"), new Promise((r) => setTimeout(() => r("open"), 1_000))])).resolves.toBe("closed");
+    first.sock.destroy();
+  });
 });
 
 describe("Streamable HTTP transport (ALZA_HTTP_ENABLE_ACCOUNT opt-in)", () => {

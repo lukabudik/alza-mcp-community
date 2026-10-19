@@ -61,6 +61,14 @@ export interface HttpServerOptions {
   maxSessions?: number;
   /** Close a session after this many ms without a request. Default 30 min. */
   sessionIdleMs?: number;
+  /** Time a client has to send a whole request (headers and body), in ms; the
+   * response, e.g. a long tool call or a GET/SSE stream, is not limited. Headers
+   * get half of it. Default 30 s. */
+  requestTimeoutMs?: number;
+  /** Open TCP connection cap (SSE streams count). Default 256. */
+  maxConnections?: number;
+  /** Request bodies buffered at once (each up to 4 MB); 503 beyond it. Default 16. */
+  maxConcurrentBodyReads?: number;
   baseUrl?: string;
   cdpUrl?: string;
 }
@@ -129,8 +137,28 @@ function contentTypeValues(req: IncomingMessage): string[] {
   return values;
 }
 
-/** Read the JSON body within MAX_BODY_BYTES, or answer 413/400 and return null. */
-async function readJsonBodyOrReply(req: IncomingMessage, res: ServerResponse): Promise<{ body: unknown } | null> {
+/** Bodies being buffered right now, across all requests of one server. */
+interface BodyReads {
+  active: number;
+  max: number;
+}
+
+/** Read the JSON body within MAX_BODY_BYTES, or answer 413/400/503 and return null.
+ * At most `reads.max` bodies are buffered at once (each up to MAX_BODY_BYTES); a
+ * request over that cap is drained without buffering, then answered 503, so the
+ * client gets the response instead of a reset. requestTimeout bounds the drain. */
+async function readJsonBodyOrReply(req: IncomingMessage, res: ServerResponse, reads: BodyReads): Promise<{ body: unknown } | null> {
+  if (reads.active >= reads.max) {
+    await new Promise<void>((resolve) => {
+      req.once("end", resolve);
+      req.once("close", resolve);
+      req.resume();
+    });
+    res.setHeader("retry-after", "1");
+    jsonRpcError(res, 503, "Server busy; try again shortly");
+    return null;
+  }
+  reads.active++;
   try {
     return { body: await readJsonBody(req) };
   } catch (err) {
@@ -138,9 +166,13 @@ async function readJsonBodyOrReply(req: IncomingMessage, res: ServerResponse): P
       res.setHeader("connection", "close");
       jsonRpcError(res, 413, err.message);
     } else {
-      jsonRpcError(res, 400, `Invalid request body: ${(err as Error).message}`);
+      // Fixed text: JSON.parse messages quote part of the client's input.
+      log.debug("http: invalid request body", { error: (err as Error).message });
+      jsonRpcError(res, 400, "Invalid request body: expected a JSON-RPC message");
     }
     return null;
+  } finally {
+    reads.active--;
   }
 }
 
@@ -163,6 +195,8 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
   }
   const maxSessions = opts.maxSessions ?? 50;
   const sessionIdleMs = opts.sessionIdleMs ?? 30 * 60 * 1000;
+  const requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
+  const bodyReads: BodyReads = { active: 0, max: opts.maxConcurrentBodyReads ?? 16 };
   const allowedHosts = (opts.allowedHosts && opts.allowedHosts.length > 0
     ? opts.allowedHosts
     : isLoopback(host) ? LOOPBACK_HOSTS : []
@@ -245,7 +279,7 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
         const contentTypes = contentTypeValues(req);
         if (contentTypes.length > 1) return jsonRpcError(res, 400, "Duplicate Content-Type header");
         if (contentTypes[0]?.includes("application/json")) {
-          const read = await readJsonBodyOrReply(req, res);
+          const read = await readJsonBodyOrReply(req, res, bodyReads);
           if (!read) return;
           body = read.body;
         }
@@ -259,7 +293,7 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
       res.setHeader("allow", "POST, GET, DELETE");
       return jsonRpcError(res, 405, `Method ${req.method} is not supported on ${path}; use POST to initialize a session`);
     }
-    const read = await readJsonBodyOrReply(req, res);
+    const read = await readJsonBodyOrReply(req, res, bodyReads);
     if (!read) return;
     const body = read.body;
     if (Array.isArray(body)) return jsonRpcError(res, 400, "JSON-RPC batches are not supported; send the initialize request on its own (not in an array)");
@@ -298,12 +332,24 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
     }
   };
 
-  const server: Server = createServer((req, res) => {
-    handle(req, res).catch((err) => {
-      log.error("http: request failed", { error: (err as Error).message });
-      jsonRpcError(res, 500, "Internal server error");
-    });
-  });
+  // Node's defaults (300 s per request, 60 s for headers) let one client hold a
+  // connection and a 4 MB buffer for minutes by trickling bytes. These limits end
+  // when the request is received, so long responses and SSE streams are unaffected.
+  // Node checks them on an interval (30 s by default): keep it a fraction of the limit.
+  const server: Server = createServer(
+    {
+      requestTimeout: requestTimeoutMs,
+      headersTimeout: Math.ceil(requestTimeoutMs / 2),
+      connectionsCheckingInterval: Math.min(30_000, Math.max(100, Math.floor(requestTimeoutMs / 4))),
+    },
+    (req, res) => {
+      handle(req, res).catch((err) => {
+        log.error("http: request failed", { error: (err as Error).message });
+        jsonRpcError(res, 500, "Internal server error");
+      });
+    },
+  );
+  server.maxConnections = opts.maxConnections ?? 256;
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -371,6 +417,8 @@ export function parseCliConfig(argv: string[], env: NodeJS.ProcessEnv = process.
   const allowedHosts = env.ALZA_HTTP_ALLOWED_HOSTS?.split(",").map((h) => h.trim()).filter(Boolean);
   const idle = Number(env.ALZA_HTTP_SESSION_IDLE_MS);
   const max = Number(env.ALZA_HTTP_MAX_SESSIONS);
+  const requestTimeout = Number(env.ALZA_HTTP_REQUEST_TIMEOUT_MS);
+  const maxConnections = Number(env.ALZA_HTTP_MAX_CONNECTIONS);
   return {
     transport,
     http: {
@@ -381,6 +429,8 @@ export function parseCliConfig(argv: string[], env: NodeJS.ProcessEnv = process.
       allowedHosts,
       maxSessions: Number.isInteger(max) && max > 0 ? max : undefined,
       sessionIdleMs: Number.isFinite(idle) && idle > 0 ? idle : undefined,
+      requestTimeoutMs: Number.isInteger(requestTimeout) && requestTimeout > 0 ? requestTimeout : undefined,
+      maxConnections: Number.isInteger(maxConnections) && maxConnections > 0 ? maxConnections : undefined,
       baseUrl: env.ALZA_BASE_URL?.trim() || undefined,
       cdpUrl: env.ALZA_CDP_URL,
     },
