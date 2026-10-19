@@ -126,6 +126,16 @@ export function parseMoney(raw: string | null | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/**
+ * JSON-LD `offers.price` (`88.32`, `"88.32"`, `3990`) as price text `parseMoney`
+ * reads: decimal comma plus a currency marker. The marker only ends the number
+ * for the parser, so it is the same for every storefront.
+ */
+export function jsonLdPriceText(price: unknown): string | null {
+  const n = typeof price === "number" ? price : Number(price);
+  return Number.isFinite(n) && n > 0 ? `${String(n).replace(".", ",")} €` : null;
+}
+
 /** Resolve current/original price from observed card text; undefined when the card is not discounted. */
 export function computeDeal(card: RawDealCard): { price: number; originalPrice: number; savings: number; discountPercent: number } | undefined {
   const price = parseMoney(card.priceText);

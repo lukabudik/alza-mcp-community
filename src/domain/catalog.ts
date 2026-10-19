@@ -6,7 +6,7 @@ import { extractJsonLd, findProduct as findJsonLdProduct } from "../infra/jsonld
 import { raceDeadline, TOOL_BUDGET_MS } from "../infra/deadline.js";
 import { log } from "../infra/logger.js";
 import type { AppliedRange, Category, CategoryFilters, FacetGroup, FacetValue, Product, ProductParam, SearchResult } from "./types.js";
-import { compareDeals, DEFAULT_DEAL_CATEGORIES, parseDealCard, payablePrices, type Deal } from "./deals.js";
+import { compareDeals, DEFAULT_DEAL_CATEGORIES, jsonLdPriceText, parseDealCard, payablePrices, type Deal } from "./deals.js";
 import { availabilityFields, normalizeAvailability } from "./availability.js";
 import { commodityIdFromUrl } from "./reviews.js";
 
@@ -230,7 +230,7 @@ const PRODUCT_PARAMS_CAP = 30;
  */
 const PRODUCT_PARAMS_SCRAPE_CAP = 80;
 
-const PRODUCT_PAGE_EXTRACTOR = `(function() {
+export const PRODUCT_PAGE_EXTRACTOR = `(function() {
   var lds = Array.from(document.querySelectorAll('script[type="application/ld+json"]')).map(function(s) {
     try { return JSON.parse(s.textContent || '{}'); } catch (e) { return null; }
   }).filter(Boolean);
@@ -269,8 +269,8 @@ const PRODUCT_PAGE_EXTRACTOR = `(function() {
     // Promo-code price block ("Kúpiť s kódom ALZADNI15 88,32 €"; alza.sk 2026-10-14)
     // next to the shelf price box. Server-rendered on the product page.
     promoCode: (function() { var e = document.querySelector('.promo-action-prices__discount-code'); return e ? (e.textContent || '').trim() || null : null; })(),
-    promoPriceText: (function() { var e = document.querySelector('.promo-action-prices__price'); return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() || null : null; })(),
-    shelfPriceText: (function() { var e = document.querySelector('.js-price-box__primary-price__value'); return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() || null : null; })(),
+    promoPriceText: (function() { var e = document.querySelector('.promo-action-prices__price'); return e ? (e.textContent || '').replace(/\\s+/g, ' ').trim() || null : null; })(),
+    shelfPriceText: (function() { var e = document.querySelector('.js-price-box__primary-price__value'); return e ? (e.textContent || '').replace(/\\s+/g, ' ').trim() || null : null; })(),
     params: Array.from(document.querySelectorAll('.paramTbl tr, table.paramTbl tr, .productSpecBox tr')).slice(0, ${PRODUCT_PARAMS_SCRAPE_CAP}).map(function(tr) {
       var th = tr.querySelector('th'), td = tr.querySelector('td');
       return { name: th ? th.textContent.trim().replace(/\\s+/g,' ') : '', value: td ? td.textContent.trim().replace(/\\s+/g,' ') : '' };
@@ -933,7 +933,7 @@ export class Catalog {
         currency: offers.priceCurrency ?? this.browser.locale.currency,
         ...payablePrices({
           availabilityText: data.availabilityText,
-          priceText: data.shelfPriceText ?? (offers.price !== undefined ? `${offers.price} €` : null),
+          priceText: data.shelfPriceText ?? jsonLdPriceText(offers.price),
           originalPriceText: null,
           originalIsStrike: false,
           couponCode: data.promoCode,

@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import * as cheerio from "cheerio";
 import { describe, expect, it } from "vitest";
-import { CARD_EXTRACTOR_FN, Catalog } from "../src/domain/catalog.js";
-import { conditionOf, parseDealCard, parseMemberText, parseMoney, payablePrices, promoPercentOf, type Deal, type RawDealCard } from "../src/domain/deals.js";
+import { CARD_EXTRACTOR_FN, Catalog, PRODUCT_PAGE_EXTRACTOR } from "../src/domain/catalog.js";
+import { conditionOf, jsonLdPriceText, parseDealCard, parseMemberText, parseMoney, payablePrices, promoPercentOf, type Deal, type RawDealCard } from "../src/domain/deals.js";
 import { formatDeals } from "../src/tools/get-deals.js";
 import { formatProductLine } from "../src/tools/format.js";
 import { resolveLocale } from "../src/infra/locale.js";
@@ -306,5 +306,31 @@ describe("opened-box (Rozbalené) goods", () => {
     const res = await new Catalog(browser).getDeals({ categoryId: 1 });
     expect(res.deals.map((d) => d.code)).toEqual(["WK227y9b"]);
     expect(res.usedOffers).toHaveLength(1);
+  });
+});
+
+describe("product-page price fallback", () => {
+  it("formats a JSON-LD price so parseMoney reads its decimals", () => {
+    expect(jsonLdPriceText(88.32)).toBe("88,32 €");
+    expect(jsonLdPriceText("88.32")).toBe("88,32 €");
+    expect(parseMoney(jsonLdPriceText(88.32))).toBe(88.32);
+    expect(parseMoney(jsonLdPriceText(3990))).toBe(3990);
+    expect(parseMoney(jsonLdPriceText(1234.5))).toBe(1234.5);
+    expect(jsonLdPriceText(undefined)).toBeNull();
+    expect(jsonLdPriceText("n/a")).toBeNull();
+  });
+
+  it("keeps the promo price when the shelf price comes from JSON-LD", () => {
+    // No `.js-price-box__primary-price__value` on the page: the list price is the JSON-LD one.
+    expect(payablePrices({ priceText: jsonLdPriceText(88.32), originalPriceText: null, originalIsStrike: false, couponCode: "ALZADNI15", couponPriceText: "75,07 €" }))
+      .toMatchObject({ priceNow: 75.07, promoCode: "ALZADNI15", promoPercent: 15 });
+  });
+});
+
+describe("browser-side extractors", () => {
+  // They are JS source in template literals: "\\s" must be doubled there, or the
+  // browser gets /s+/ (runs of the letter s) instead of /\s+/.
+  it("never ship a /s+/ regex to the page", () => {
+    for (const src of [PRODUCT_PAGE_EXTRACTOR, CARD_EXTRACTOR_FN]) expect(src).not.toMatch(/\/s\+\//);
   });
 });
