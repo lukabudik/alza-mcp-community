@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { MUTATION_ACTIONS } from "../src/domain/mobile-account.js";
 import { buildServer } from "../src/server.js";
 
 /**
@@ -134,11 +135,18 @@ describe("tool annotation contract", () => {
     }
   });
 
-  it("lets prepare_mutation issue a token for every typed mutation, and mutate_list no longer offers the dead set_watchdog", async () => {
+  it("lets prepare_mutation issue a token for exactly the guarded mutations, and mutate_list no longer offers the dead set_watchdog", async () => {
     const tools = await listTools();
     const prepare = tools.find((t) => t.name === "prepare_mutation")!.inputSchema.properties!.action!.enum!;
-    expect(prepare).toEqual(expect.arrayContaining(["cancel_order", "watchdog_set", "watchdog_delete", "web_place_order"]));
+    // Every action assertMutationToken accepts, once each, and nothing else (#112:
+    // cancel_order was guarded but missing from the schema, so no token could be made).
+    expect([...prepare].sort()).toEqual([...MUTATION_ACTIONS].sort());
+    expect(new Set(prepare).size).toBe(prepare.length);
+    expect(prepare).toContain("cancel_order");
     expect(prepare).not.toContain("set_watchdog");
+    // Every mutate_list action is guarded too.
+    const mutateActions = tools.find((t) => t.name === "mutate_list")!.inputSchema.properties!.action!.enum!;
+    expect(mutateActions.filter((a) => !prepare.includes(a))).toEqual([]);
     const mutate = tools.find((t) => t.name === "mutate_list")!.inputSchema.properties!.action!.enum!;
     expect(mutate).not.toContain("set_watchdog");
   });

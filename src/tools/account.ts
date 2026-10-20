@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { OUTPUT_SCHEMAS } from "./output-schemas.js";
-import type { MobileAccount } from "../domain/mobile-account.js";
+import { MUTATION_ACTIONS, type MobileAccount } from "../domain/mobile-account.js";
 import type { RegisterableTool, ToolDeps, ToolResult } from "./types.js";
 import { ANONYMOUS_NOTE, formatAddToCart, formatCart, formatCheckoutPreview, formatDeliveryOptions, isAnonymousUserData, jsonResult, withConciseText } from "./account-format.js";
 
@@ -20,23 +20,13 @@ const jsonObject = z.record(z.string(), z.unknown());
 const AUTH_PREREQ =
   "Requires a loaded mobile API access token — check `account_status` first; if none is loaded, run `auth_start`, have the user complete the browser sign-in, then `auth_exchange` with the returned code and state.";
 
+/** The whitelisted writes `mutate_list` executes; each is also a guarded MUTATION_ACTIONS entry. */
 const LOW_RISK_ACTIONS = [
   "create", "rename", "delete", "add", "remove", "move", "set_country", "set_isic",
   "add_gift", "add_order_service", "send_feedback", "submit_discussion", "rate_discussion",
   "coupon_add", "coupon_remove", "basket_update", "basket_unlock",
   "gdpr_export",
-] as const;
-
-const HIGH_IMPACT_ACTIONS = [
-  "after_order_payment", "register", "address_create", "address_edit", "address_delete",
-  "review_submit", "subscription_activate", "subscription_update_installment", "attachment_upload",
-  "web_place_order", "web_after_order_payment", "cancel_order",
-  // account credential/identity mutations (A14–A18, 2026-09-22)
-  "change_password", "two_factor_set", "phone_change", "email_change", "delete_account",
-] as const;
-
-/** Typed account writes outside the high-impact set (native watchdog, 2026-10-06). */
-const TYPED_LOW_RISK_ACTIONS = ["watchdog_set", "watchdog_delete"] as const;
+] as const satisfies readonly (typeof MUTATION_ACTIONS)[number][];
 
 const READ_OPERATIONS = [
   "url_info", "legacy_product", "router_product", "quick_order_summary", "user_review",
@@ -163,7 +153,8 @@ export function createAccountTools(deps: ToolDeps): RegisterableTool[] {
             "Each action has its own pending token: preparing the same action again replaces its earlier token, tokens prepared for other actions stay valid. " +
             "Do not use for read-only tools, and not for `add_to_cart` (which is a low-risk cart write that needs no token).",
           inputSchema: {
-            action: z.enum([...LOW_RISK_ACTIONS, ...HIGH_IMPACT_ACTIONS, ...TYPED_LOW_RISK_ACTIONS]).describe("Which mutation you are about to perform; the token will only be accepted by that action's tool."),
+            // The list assertMutationToken enforces, so the schema cannot drift from it (#112).
+            action: z.enum(MUTATION_ACTIONS).describe("Which mutation you are about to perform; the token will only be accepted by that action's tool."),
             payload: jsonObject.describe("The exact arguments of the mutation call, without `confirmation_token` — e.g. cancel_order: {order_id, part_id, hash, reason}; mutate_list coupon_add: {coupon: \"CODE\"}. Show these to the user when asking for confirmation; the call must repeat them unchanged (omitted defaulted arguments are fine)."),
           },
           annotations: { readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
