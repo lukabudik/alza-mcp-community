@@ -278,7 +278,10 @@ export class MobileAccount {
   private readonly pendingMutations = new Map<string, { token: string; payloadHash?: string; expiresAt: number }>();
   /** Numeric user id of the signed-in account, learned from a `user_data` read. */
   private knownUserId?: string;
-  constructor(private readonly api: MobileApi) {
+  /** Actions `prepare_mutation` may issue a token for (all of MUTATION_ACTIONS unless the operator narrowed it; see tools/allowlist.ts). */
+  readonly mutationActions: readonly (typeof MUTATION_ACTIONS)[number][];
+  constructor(private readonly api: MobileApi, allowedActions?: readonly string[]) {
+    this.mutationActions = allowedActions ? MUTATION_ACTIONS.filter((a) => allowedActions.includes(a)) : MUTATION_ACTIONS;
     if (api.userId !== undefined && Number.isSafeInteger(api.userId) && api.userId > 0) this.knownUserId = String(api.userId);
   }
 
@@ -421,7 +424,14 @@ export class MobileAccount {
    * MUTATION_TOKEN_TTL_MS; and a token prepared with a payload is accepted only
    * for the same payload (canonical SHA-256, see `mutationPayloadHash`). An
    * expired or payload-mismatched token is spent, so nothing is sent. */
+  private assertActionAllowed(action: string): void {
+    if (!(this.mutationActions as readonly string[]).includes(action)) {
+      throw new UserError(`Mutation action ${action} is disabled on this deployment (allowed: ${this.mutationActions.join(", ") || "none"}).`);
+    }
+  }
+
   private assertMutationToken(action: string, token: string, bound: Record<string, unknown>, message = `Invalid or expired ${action} confirmation token; call prepare_mutation again.`): void {
+    this.assertActionAllowed(action);
     const pending = this.pendingMutations.get(action);
     if (!pending || typeof token !== "string" || !tokensEqual(pending.token, token)) throw new UserError(message);
     this.pendingMutations.delete(action);
@@ -1063,6 +1073,7 @@ export class MobileAccount {
    * other actions stay valid. */
   prepareMutation(action: string, payload?: Record<string, unknown>): { action: string; confirmationToken: string; expiresAt: string; payloadBound: boolean } {
     if (!(MUTATION_ACTIONS as readonly string[]).includes(action)) throw new UserError(`Unknown mutation action: ${action}`);
+    this.assertActionAllowed(action);
     if (payload !== undefined && (payload === null || typeof payload !== "object" || Array.isArray(payload))) throw new UserError("payload must be a JSON object");
     const confirmationToken = randomBytes(24).toString("hex");
     const expiresAt = Date.now() + MUTATION_TOKEN_TTL_MS;

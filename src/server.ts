@@ -28,6 +28,7 @@ import { createPcBuildCheckTool, createPcBuildSuggestTool } from "./tools/pc-bui
 import { createWatchdogTools } from "./tools/watchdog.js";
 import { parseToolsetsEnv, registerToolsets, type LockedToolsets } from "./tools/toolsets.js";
 import { registerReportIssueTool } from "./tools/report-issue.js";
+import { parseMutationActionsAllowEnv, parseToolsAllowEnv } from "./tools/allowlist.js";
 import { RecentErrors } from "./infra/issue-report.js";
 import { MobileApi } from "./infra/mobile-api.js";
 import { ImpersonateTransport, cfFetch } from "./infra/impersonate-transport.js";
@@ -47,6 +48,10 @@ export interface BuildOptions {
   lockedToolsets?: LockedToolsets;
   /** Toolsets enabled at startup on top of the defaults. Default: `ALZA_TOOLSETS` (see parseToolsetsEnv). */
   enabledToolsets?: readonly string[];
+  /** Tools this deployment exposes; every other one is removed. Default: `ALZA_TOOLS_ALLOW` (see tools/allowlist.ts). */
+  allowedTools?: ReadonlySet<string>;
+  /** `prepare_mutation` actions that may run. Default: `ALZA_MUTATION_ACTIONS_ALLOW` (see tools/allowlist.ts). */
+  allowedMutationActions?: readonly string[];
   /** Auto-load ALZA_TOKEN_FILE (default true; see MobileApiOptions.loadTokenFile). */
   loadTokenFile?: boolean;
   /** Extra sentence appended to the server instructions (e.g. the HTTP-mode note). */
@@ -80,7 +85,8 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
     fetchImpl: cfTransport.available ? cfFetch(cfTransport) : undefined,
     loadTokenFile: opts.loadTokenFile,
   });
-  const mobileAccount = new MobileAccount(mobileApi);
+  const allowedTools = opts.allowedTools ?? parseToolsAllowEnv(process.env.ALZA_TOOLS_ALLOW);
+  const mobileAccount = new MobileAccount(mobileApi, opts.allowedMutationActions ?? parseMutationActionsAllowEnv(process.env.ALZA_MUTATION_ACTIONS_ALLOW));
   // AlzaBox lockers come from the public salesNetwork API, which sits behind the
   // Cloudflare bot wall: reuse MobileApi's sidecar → fetch → browser chain.
   const pickup = new Pickup(browser.locale, { getJson: (url) => mobileApi.request(url) });
@@ -109,6 +115,7 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
         "PC building (enable `pc_builder`): `pc_build_suggest` proposes a compatibility-checked parts list within a CZK budget; `pc_build_check` checks any parts list (socket, RAM, PSU wattage, GPU/cooler clearance, form factor). " +
         "`mobile_read` (toolset `advanced_raw`) is the raw read-only escape hatch for mobile API operations without a dedicated tool. " +
         "If a tool fails unexpectedly or returns clearly wrong data (not a user mistake such as invalid arguments or an unknown product), call `report_issue` (always available) to draft a GitHub issue for the alza-mcp-community maintainers, show the draft to the user, and file it with the returned `gh` command or link only if they agree." +
+        (allowedTools ? ` This deployment exposes only these tools, all enabled from the start (toolset and other tool names above do not apply): ${[...allowedTools].join(", ")}.` : "") +
         (opts.instructionsNote ? ` ${opts.instructionsNote}` : ""),
     }
   );
@@ -144,9 +151,9 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
     ...createWatchdogTools(deps),
     createPcBuildCheckTool(deps),
     createPcBuildSuggestTool(deps),
-  ], opts.lockedToolsets, opts.enabledToolsets ?? parseToolsetsEnv(process.env.ALZA_TOOLSETS));
+  ], opts.lockedToolsets, opts.enabledToolsets ?? parseToolsetsEnv(process.env.ALZA_TOOLSETS), allowedTools);
 
-  registerReportIssueTool(server, errorWrap, {
+  if (!allowedTools || allowedTools.has("report_issue")) registerReportIssueTool(server, errorWrap, {
     recentErrors,
     diagnostics: () => ({
       version: VERSION,
