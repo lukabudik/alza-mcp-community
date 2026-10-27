@@ -228,13 +228,15 @@ function validateListPayload(action: string, payload: Record<string, unknown>): 
  * as `/api/users//…` or `NaN`. Other (optional) args pass through unchanged. */
 const numberAsString = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? String(v) : v);
 const numericStringAsNumber = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? Number(v) : v);
-const readUserId = z.preprocess(numberAsString, z.string({ required_error: "user_id is required (the numeric Alza user id from profile/user_data)", invalid_type_error: "user_id must be the numeric Alza user id from profile/user_data" })
+/** Zod 4 error map: one message when the value is missing, another when it has the wrong type. */
+const requiredOr = (required: string, invalid: string) => ({ error: (iss: { input?: unknown }) => (iss.input === undefined ? required : invalid) });
+const readUserId = z.preprocess(numberAsString, z.string(requiredOr("user_id is required (the numeric Alza user id from profile/user_data)", "user_id must be the numeric Alza user id from profile/user_data"))
   .regex(/^\d{1,16}$/, "user_id must be the numeric Alza user id from profile/user_data"));
-const readPositiveInt = (name: string) => z.preprocess(numericStringAsNumber, z.number({ required_error: `${name} is required`, invalid_type_error: `${name} must be a positive integer` })
+const readPositiveInt = (name: string) => z.preprocess(numericStringAsNumber, z.number(requiredOr(`${name} is required`, `${name} must be a positive integer`))
   .int(`${name} must be a positive integer`).positive(`${name} must be a positive integer`));
-const readText = (name: string, max = 200) => z.preprocess(numberAsString, z.string({ required_error: `${name} is required`, invalid_type_error: `${name} must be a string` })
+const readText = (name: string, max = 200) => z.preprocess(numberAsString, z.string(requiredOr(`${name} is required`, `${name} must be a string`))
   .min(1, `${name} must be a non-empty string`).max(max, `${name} must be at most ${max} characters`));
-const readFinite = (name: string) => z.preprocess(numericStringAsNumber, z.number({ required_error: `${name} is required`, invalid_type_error: `${name} must be a number` }).finite(`${name} must be a finite number`));
+const readFinite = (name: string) => z.preprocess(numericStringAsNumber, z.number(requiredOr(`${name} is required`, `${name} must be a number`)).finite(`${name} must be a finite number`));
 const READ_REQUIRED_ARGS: Partial<Record<string, z.ZodRawShape>> = {
   url_info: { url: readText("url", 2000) },
   legacy_product: { product_id: readPositiveInt("product_id") },

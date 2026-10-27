@@ -542,7 +542,7 @@ export const PC_BUILD_OUTPUT = z
 
 /** Map tool name → its output schema. Kept in one place so the registration
  * contract test can assert coverage per tool. */
-export const OUTPUT_SCHEMAS: Record<string, z.AnyZodObject> = {
+export const OUTPUT_SCHEMAS: Record<string, z.ZodObject> = {
   // Catalog (typed domain shapes)
   search_products: SEARCH_PRODUCTS_OUTPUT,
   get_product: GET_PRODUCT_OUTPUT,

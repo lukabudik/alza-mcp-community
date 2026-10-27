@@ -58,7 +58,8 @@ describe("per-tool outputSchema (N-1)", () => {
       const os = res.tools.find((t) => t.name === "mobile_read")!.outputSchema as Record<string, unknown>;
       const props = os.properties as Record<string, unknown>;
       expect(Object.keys(props)).toEqual(expect.arrayContaining(["err", "msg", "data"]));
-      expect(os.additionalProperties).toBe(true);
+      // Zod 3 emits `true`, Zod 4 `{}`: both allow any extra key.
+      expect([true, {}]).toContainEqual(os.additionalProperties);
       expect(String(os.description)).toContain("err 0/1/113");
     } finally {
       await client.close();

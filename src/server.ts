@@ -204,12 +204,15 @@ function isUserError(err: unknown): boolean {
 }
 
 /** `path: message` per issue, bounded: enums and long messages are summarised. */
-export function formatZodIssues(issues: ReadonlyArray<{ path: ReadonlyArray<string | number>; message: string; code?: string; options?: unknown; received?: unknown }>): string {
+export function formatZodIssues(issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string; code?: string; options?: unknown; values?: unknown; received?: unknown }>): string {
   const shown = issues.slice(0, 5).map((i) => {
-    const where = i.path.length ? `${i.path.join(".")}: ` : "";
-    if (i.code === "invalid_enum_value" && Array.isArray(i.options)) {
-      const opts = i.options.length > 8 ? `one of ${i.options.length} allowed values (e.g. ${i.options.slice(0, 4).join(", ")})` : `one of ${i.options.join(", ")}`;
-      return `${where}invalid value ${truncateInput(JSON.stringify(i.received), 40)}; expected ${opts}`;
+    const where = i.path.length ? `${i.path.map(String).join(".")}: ` : "";
+    // Zod 3 reports enums as invalid_enum_value + options, Zod 4 as invalid_value + values.
+    const options = i.code === "invalid_enum_value" ? i.options : i.code === "invalid_value" ? i.values : undefined;
+    if (Array.isArray(options)) {
+      const opts = options.length > 8 ? `one of ${options.length} allowed values (e.g. ${options.slice(0, 4).join(", ")})` : `one of ${options.join(", ")}`;
+      const got = i.received === undefined ? "" : ` ${truncateInput(JSON.stringify(i.received), 40)}`;
+      return `${where}invalid value${got}; expected ${opts}`;
     }
     return `${where}${truncateInput(i.message, 160)}`;
   });
@@ -218,8 +221,18 @@ export function formatZodIssues(issues: ReadonlyArray<{ path: ReadonlyArray<stri
 
 const SDK_VALIDATION = /^(?:MCP error -32602: )?Input validation error: Invalid arguments for tool ([\w.-]+): ([\s\S]*)$/;
 
-/** Rewrite the SDK's raw-JSON input-validation text into `path: message` lines. */
-export function shortenValidationText(text: string): string {
+/** Newer SDKs print one `message at a.b` line per issue; Zod 4 spells an enum miss as
+ * `Invalid option: expected one of "a"|"b"`. */
+const SDK_ISSUE_LINE = /^(.*?)(?: at ([\w.-]+))?$/;
+const ZOD4_ENUM = /^Invalid option: expected one of ((?:"[^"]*"\|?)+)$/;
+
+function valueAt(args: unknown, path: ReadonlyArray<string>): unknown {
+  return path.reduce<unknown>((v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined), args);
+}
+
+/** Rewrite the SDK's input-validation text (raw JSON, or `message at path` lines) into
+ * `path: message` text. `args` are the call's arguments, to echo a rejected enum value. */
+export function shortenValidationText(text: string, args?: unknown): string {
   const m = SDK_VALIDATION.exec(text);
   if (!m) return text;
   try {
@@ -227,7 +240,16 @@ export function shortenValidationText(text: string): string {
     if (Array.isArray(issues) && issues.every((i) => i && typeof i === "object" && typeof i.message === "string")) {
       return `Invalid arguments for ${m[1]} — ${formatZodIssues(issues.map((i) => ({ ...i, path: Array.isArray(i.path) ? i.path : [] })))}`;
     }
-  } catch { /* not JSON: keep the SDK text */ }
+  } catch {
+    const issues = m[2]!.split("\n").filter(Boolean).map((line) => {
+      const [, message = line, at] = SDK_ISSUE_LINE.exec(line) ?? [];
+      const path = at ? at.split(".") : [];
+      const en = ZOD4_ENUM.exec(message);
+      if (!en) return { path, message };
+      return { path, message, code: "invalid_value", values: en[1]!.split("|").map((o) => o.slice(1, -1)), received: valueAt(args, path) };
+    });
+    if (issues.length) return `Invalid arguments for ${m[1]} — ${formatZodIssues(issues)}`;
+  }
   return truncateInput(text, 400);
 }
 
@@ -241,7 +263,7 @@ function hardenToolCalls(server: McpServer): void {
     const params = request.params.arguments === undefined ? { ...request.params, arguments: {} } : request.params;
     const result = (await original({ ...request, params }, extra)) as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
     if (result?.isError && Array.isArray(result.content)) {
-      for (const c of result.content) if (c.type === "text" && typeof c.text === "string") c.text = shortenValidationText(c.text);
+      for (const c of result.content) if (c.type === "text" && typeof c.text === "string") c.text = shortenValidationText(c.text, params.arguments);
     }
     return result as never;
   });
