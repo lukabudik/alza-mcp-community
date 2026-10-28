@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { oauthFetch, closeOAuthFetch } from "./oauth-fetch.mjs";
 
 const AUTHORITY = process.env.ALZA_OAUTH_AUTHORITY ?? "https://identity.alza.cz";
 const CLIENT_ID = process.env.ALZA_OAUTH_CLIENT_ID ?? "alza_Android";
@@ -28,7 +29,7 @@ const main = async () => {
   }
 
   const visitorId = stored.visitor_id ?? process.env.ALZA_VISITOR_ID ?? randomUUID();
-  const discoveryRes = await fetch(`${AUTHORITY}/.well-known/openid-configuration`, {
+  const discoveryRes = await oauthFetch(`${AUTHORITY}/.well-known/openid-configuration`, {
     headers: {
       accept: "application/json",
       "user-agent": "Alza/2026.15.0 (Android)",
@@ -46,7 +47,7 @@ const main = async () => {
     console.error(`note: discovery HTTP ${discoveryRes.status}; using APK default token endpoint`);
   }
 
-  const res = await fetch(tokenEndpoint, {
+  const res = await oauthFetch(tokenEndpoint, {
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
@@ -85,7 +86,9 @@ const main = async () => {
   console.log(`refresh_token ${json.refresh_token ? "rotated" : "reused"}.`);
 };
 
-main().catch((err) => {
-  console.error(`Refresh failed: ${err.message}`);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error(`Refresh failed: ${err.message}`);
+    process.exitCode = 1;
+  })
+  .finally(closeOAuthFetch);

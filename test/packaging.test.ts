@@ -119,6 +119,15 @@ describe("package contents", () => {
     }
   });
 
+  it("ships every module a shipped auth script imports", () => {
+    for (const f of pkg.files.filter((f) => /^scripts\/alza-auth-.*\.mjs$/.test(f))) {
+      const text = readFileSync(path.join(root, f), "utf8");
+      for (const m of text.matchAll(/from "\.\/([\w.-]+\.mjs)"/g)) {
+        expect(pkg.files, `${f} imports ./${m[1]}`).toContain(`scripts/${m[1]}`);
+      }
+    }
+  });
+
   it("does not point runtime strings at docs/ paths that the package does not contain", () => {
     for (const f of ["src/server.ts", "src/tools/account.ts", "src/tools/advanced.ts"]) {
       const text = readFileSync(path.join(root, f), "utf8");
@@ -132,37 +141,67 @@ describe("alza-auth-exchange.mjs pending-login.json", () => {
   const servers: http.Server[] = [];
   afterEach(() => servers.splice(0).forEach((s) => s.close()));
 
-  it("accepts the snake_case file written by alza_auth_login.py", async () => {
-    let seen = "";
+  async function tokenServer() {
+    const seen: string[] = [];
     const server = http.createServer((req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
-        seen = body;
+        seen.push(body);
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ access_token: "tok", refresh_token: "ref", expires_in: 3600 }));
       });
     });
     servers.push(server);
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    const port = (server.address() as { port: number }).port;
+    return { seen, port: (server.address() as { port: number }).port };
+  }
 
+  function pendingHome(port: number) {
     const home = mkdtempSync(path.join(tmpdir(), "alza-home-"));
     mkdirSync(path.join(home, ".alza-mcp"));
     writeFileSync(
       path.join(home, ".alza-mcp", "pending-login.json"),
       JSON.stringify({ verifier: "v", state: "s", token_endpoint: `http://127.0.0.1:${port}/token`, client_id: "cid", redirect_uri: "alza://identity", visitor_id: "vis" }),
     );
+    return home;
+  }
+
+  async function runExchange(home: string, env: Record<string, string> = {}) {
     const tokenFile = path.join(home, "tokens.json");
+    // ALZA_CF_TRANSPORT=0: plain fetch, so the test does not depend on a curl_cffi venv.
     const child = spawn(process.execPath, [path.join(scripts, "alza-auth-exchange.mjs"), "alza://identity?code=abc&state=s"], {
-      env: { ...process.env, HOME: home, ALZA_TOKEN_FILE: tokenFile },
+      env: { ...process.env, HOME: home, USERPROFILE: home, ALZA_TOKEN_FILE: tokenFile, ALZA_CF_TRANSPORT: "0", ALZA_PROXY_URL: "", ...env },
     });
     let stderr = "";
     child.stderr.on("data", (c) => (stderr += c));
     const status = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    return { status, stderr, tokenFile };
+  }
+
+  it("accepts the snake_case file written by alza_auth_login.py and sends the client secret", async () => {
+    const { seen, port } = await tokenServer();
+    const home = pendingHome(port);
+    const { status, stderr, tokenFile } = await runExchange(home);
     expect(stderr).toBe("");
     expect(status).toBe(0);
-    expect(seen).toContain("client_id=cid");
+    expect(seen[0]).toContain("client_id=cid");
+    expect(new URLSearchParams(seen[0]).get("client_secret")).toBeTruthy();
     expect(JSON.parse(readFileSync(tokenFile, "utf8")).visitor_id).toBe("vis");
+  }, 30_000);
+
+  it("omits the client secret when ALZA_OAUTH_CLIENT_SECRET is empty", async () => {
+    const { seen, port } = await tokenServer();
+    const { status } = await runExchange(pendingHome(port), { ALZA_OAUTH_CLIENT_SECRET: "" });
+    expect(status).toBe(0);
+    expect(new URLSearchParams(seen[0]).has("client_secret")).toBe(false);
+  }, 30_000);
+
+  it("refuses an un-proxied plain fetch while ALZA_PROXY_URL is set", async () => {
+    const { seen, port } = await tokenServer();
+    const { status, stderr } = await runExchange(pendingHome(port), { ALZA_PROXY_URL: "http://127.0.0.1:9" });
+    expect(status).toBe(1);
+    expect(stderr).toContain("ALZA_PROXY_URL is set");
+    expect(seen).toEqual([]);
   }, 30_000);
 });

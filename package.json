@@ -18,6 +18,7 @@
     "scripts/alza-auth-exchange.mjs",
     "scripts/alza-auth-refresh.mjs",
     "scripts/alza-auth-smoke.mjs",
+    "scripts/oauth-fetch.mjs",
     "README.md",
     "LICENSE"
   ],
