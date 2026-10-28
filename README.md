@@ -479,12 +479,24 @@ MIT. See [LICENSE](LICENSE).
     <td align="center"><a href="https://github.com/lukabudik"><img src="https://github.com/lukabudik.png?size=100" width="80" alt=""><br><sub><b>Luka Budík</b></sub></a><br><sub>Creator, maintainer</sub></td>
     <td align="center"><a href="https://github.com/samuelseidel"><img src="https://github.com/samuelseidel.png?size=100" width="80" alt=""><br><sub><b>Samuel Seidel</b></sub></a><br><sub>Maintainer</sub></td>
     <td align="center"><a href="https://github.com/jankryh"><img src="https://github.com/jankryh.png?size=100" width="80" alt=""><br><sub><b>@jankryh</b></sub></a><br><sub>OAuth login fix</sub></td>
+    <td align="center"><a href="https://github.com/Flickerko"><img src="https://github.com/Flickerko.png?size=100" width="80" alt=""><br><sub><b>Peter Kizik</b></sub></a><br><sub>alza.sk support, deals</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="https://github.com/Huge"><img src="https://github.com/Huge.png?size=100" width="80" alt=""><br><sub><b>Martin Vlach</b></sub></a><br><sub>HTTP body limits</sub></td>
+    <td align="center"><a href="https://github.com/MatusPohorenec"><img src="https://github.com/MatusPohorenec.png?size=100" width="80" alt=""><br><sub><b>Matúš Pohorenec</b></sub></a><br><sub>Windows postinstall</sub></td>
+    <td align="center"><a href="https://github.com/4sapp"><img src="https://github.com/4sapp.png?size=100" width="80" alt=""><br><sub><b>@4sapp</b></sub></a><br><sub>Windows build</sub></td>
   </tr>
 </table>
 
 A big thank you to **[Samuel Seidel](https://github.com/samuelseidel)**, the project's first outside contributor and now a co-maintainer. He built the account, cart, checkout and order tools, toolsets, typed output schemas, category filtering and the live-verified test harness, which together took the project from a 5-tool catalog browser to a full shopping agent ([#1](https://github.com/lukabudik/alza-mcp-community/pull/1), [#5](https://github.com/lukabudik/alza-mcp-community/pull/5)).
 
-Thanks also to **[@jankryh](https://github.com/jankryh)**, who tracked down why OAuth login never worked from the npm package and fixed it ([#29](https://github.com/lukabudik/alza-mcp-community/issues/29), [#30](https://github.com/lukabudik/alza-mcp-community/pull/30)).
+Thanks also to:
+
+- **[@jankryh](https://github.com/jankryh)**, who tracked down why OAuth login never worked from the npm package and fixed it ([#29](https://github.com/lukabudik/alza-mcp-community/issues/29), [#30](https://github.com/lukabudik/alza-mcp-community/pull/30)).
+- **[Peter Kizik](https://github.com/Flickerko)**, who made the API calls send the storefront's own country and language so alza.sk works, and brought `get_deals` to alza.sk with the lowest price a buyer can actually pay ([#108](https://github.com/lukabudik/alza-mcp-community/pull/108), [#113](https://github.com/lukabudik/alza-mcp-community/pull/113)).
+- **[Martin Vlach](https://github.com/Huge)**, who enforced the request body size limit on existing HTTP sessions ([#109](https://github.com/lukabudik/alza-mcp-community/pull/109)).
+- **[Matúš Pohorenec](https://github.com/MatusPohorenec)**, who fixed the `curl_cffi` venv setup in postinstall on Windows ([#114](https://github.com/lukabudik/alza-mcp-community/pull/114)).
+- **[@4sapp](https://github.com/4sapp)**, who made the build scripts work on Windows ([#106](https://github.com/lukabudik/alza-mcp-community/pull/106)).
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/lukabudik/alza-mcp-community/issues).
 
