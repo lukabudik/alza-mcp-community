@@ -228,13 +228,15 @@ function validateListPayload(action: string, payload: Record<string, unknown>): 
  * as `/api/users//…` or `NaN`. Other (optional) args pass through unchanged. */
 const numberAsString = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? String(v) : v);
 const numericStringAsNumber = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? Number(v) : v);
-const readUserId = z.preprocess(numberAsString, z.string({ required_error: "user_id is required (the numeric Alza user id from profile/user_data)", invalid_type_error: "user_id must be the numeric Alza user id from profile/user_data" })
+/** Zod 4 error map: one message when the value is missing, another when it has the wrong type. */
+const requiredOr = (required: string, invalid: string) => ({ error: (iss: { input?: unknown }) => (iss.input === undefined ? required : invalid) });
+const readUserId = z.preprocess(numberAsString, z.string(requiredOr("user_id is required (the numeric Alza user id from profile/user_data)", "user_id must be the numeric Alza user id from profile/user_data"))
   .regex(/^\d{1,16}$/, "user_id must be the numeric Alza user id from profile/user_data"));
-const readPositiveInt = (name: string) => z.preprocess(numericStringAsNumber, z.number({ required_error: `${name} is required`, invalid_type_error: `${name} must be a positive integer` })
+const readPositiveInt = (name: string) => z.preprocess(numericStringAsNumber, z.number(requiredOr(`${name} is required`, `${name} must be a positive integer`))
   .int(`${name} must be a positive integer`).positive(`${name} must be a positive integer`));
-const readText = (name: string, max = 200) => z.preprocess(numberAsString, z.string({ required_error: `${name} is required`, invalid_type_error: `${name} must be a string` })
+const readText = (name: string, max = 200) => z.preprocess(numberAsString, z.string(requiredOr(`${name} is required`, `${name} must be a string`))
   .min(1, `${name} must be a non-empty string`).max(max, `${name} must be at most ${max} characters`));
-const readFinite = (name: string) => z.preprocess(numericStringAsNumber, z.number({ required_error: `${name} is required`, invalid_type_error: `${name} must be a number` }).finite(`${name} must be a finite number`));
+const readFinite = (name: string) => z.preprocess(numericStringAsNumber, z.number(requiredOr(`${name} is required`, `${name} must be a number`)).finite(`${name} must be a finite number`));
 const READ_REQUIRED_ARGS: Partial<Record<string, z.ZodRawShape>> = {
   url_info: { url: readText("url", 2000) },
   legacy_product: { product_id: readPositiveInt("product_id") },
@@ -276,7 +278,10 @@ export class MobileAccount {
   private readonly pendingMutations = new Map<string, { token: string; payloadHash?: string; expiresAt: number }>();
   /** Numeric user id of the signed-in account, learned from a `user_data` read. */
   private knownUserId?: string;
-  constructor(private readonly api: MobileApi) {
+  /** Actions `prepare_mutation` may issue a token for (all of MUTATION_ACTIONS unless the operator narrowed it; see tools/allowlist.ts). */
+  readonly mutationActions: readonly (typeof MUTATION_ACTIONS)[number][];
+  constructor(private readonly api: MobileApi, allowedActions?: readonly string[]) {
+    this.mutationActions = allowedActions ? MUTATION_ACTIONS.filter((a) => allowedActions.includes(a)) : MUTATION_ACTIONS;
     if (api.userId !== undefined && Number.isSafeInteger(api.userId) && api.userId > 0) this.knownUserId = String(api.userId);
   }
 
@@ -419,7 +424,14 @@ export class MobileAccount {
    * MUTATION_TOKEN_TTL_MS; and a token prepared with a payload is accepted only
    * for the same payload (canonical SHA-256, see `mutationPayloadHash`). An
    * expired or payload-mismatched token is spent, so nothing is sent. */
+  private assertActionAllowed(action: string): void {
+    if (!(this.mutationActions as readonly string[]).includes(action)) {
+      throw new UserError(`Mutation action ${action} is disabled on this deployment (allowed: ${this.mutationActions.join(", ") || "none"}).`);
+    }
+  }
+
   private assertMutationToken(action: string, token: string, bound: Record<string, unknown>, message = `Invalid or expired ${action} confirmation token; call prepare_mutation again.`): void {
+    this.assertActionAllowed(action);
     const pending = this.pendingMutations.get(action);
     if (!pending || typeof token !== "string" || !tokensEqual(pending.token, token)) throw new UserError(message);
     this.pendingMutations.delete(action);
@@ -1061,6 +1073,7 @@ export class MobileAccount {
    * other actions stay valid. */
   prepareMutation(action: string, payload?: Record<string, unknown>): { action: string; confirmationToken: string; expiresAt: string; payloadBound: boolean } {
     if (!(MUTATION_ACTIONS as readonly string[]).includes(action)) throw new UserError(`Unknown mutation action: ${action}`);
+    this.assertActionAllowed(action);
     if (payload !== undefined && (payload === null || typeof payload !== "object" || Array.isArray(payload))) throw new UserError("payload must be a JSON object");
     const confirmationToken = randomBytes(24).toString("hex");
     const expiresAt = Date.now() + MUTATION_TOKEN_TTL_MS;

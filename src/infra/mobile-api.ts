@@ -156,9 +156,14 @@ export class MobileApi {
 
   /** Read an OAuth token stored by `scripts/alza-auth-login*` (ALZA_TOKEN_FILE, default ~/.alza-mcp/tokens.json).
    * Set ALZA_TOKEN_FILE=none to opt out. */
-  private static readStoredTokens(): { file: string; tokens: StoredTokens } | undefined {
+  private static tokenStorePath(): string | undefined {
     if (process.env.ALZA_TOKEN_FILE === "none") return undefined;
-    const file = process.env.ALZA_TOKEN_FILE ?? join(homedir(), ".alza-mcp", "tokens.json");
+    return process.env.ALZA_TOKEN_FILE ?? join(homedir(), ".alza-mcp", "tokens.json");
+  }
+
+  private static readStoredTokens(): { file: string; tokens: StoredTokens } | undefined {
+    const file = MobileApi.tokenStorePath();
+    if (!file) return undefined;
     try {
       const tokens = JSON.parse(readFileSync(file, "utf8")) as unknown;
       if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) return undefined;
@@ -324,9 +329,12 @@ export class MobileApi {
     this.accessTokenExpiresAt = expiryFrom(json.access_token, json.expires_in);
     // A new in-process sign-in (possibly another account) is not written over the
     // token store this process loaded; only that store's own session is persisted.
-    this.tokenFile = undefined;
+    // ALZA_PERSIST_SIGNIN=1 opts in: the operator signs in through this process (e.g.
+    // a long-lived remote deployment) and the store is where that session belongs.
+    this.tokenFile = process.env.ALZA_PERSIST_SIGNIN === "1" ? MobileApi.tokenStorePath() : undefined;
     this.pendingOAuth = undefined;
     this.pendingCodeVerifier = undefined;
+    await this.persistTokens(json.expires_in);
     return { authenticated: true, expiresIn: json.expires_in };
   }
 

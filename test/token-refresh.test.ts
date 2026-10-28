@@ -221,6 +221,28 @@ describe("#66: refreshed tokens are written back to ALZA_TOKEN_FILE", () => {
     expect(readFileSync(file, "utf8")).toBe(before);
   });
 
+  it("with ALZA_PERSIST_SIGNIN=1, an in-process sign-in is written to the store and survives a restart", async () => {
+    const file = path.join(dir, "tokens.json");
+    process.env.ALZA_TOKEN_FILE = file;
+    process.env.ALZA_PERSIST_SIGNIN = "1";
+    try {
+      const httpFetch: HttpFetch = async (url) => {
+        if (url.includes("openid-configuration")) return json(200, { token_endpoint: "https://identity.test/connect/token" });
+        return json(200, { access_token: "signed-in", refresh_token: "rt-1", expires_in: 3600 });
+      };
+      const api = new MobileApi({ baseUrl: "https://alza.test", httpFetch });
+      expect(api.isAuthenticated).toBe(false);
+      const start = await api.startOAuth();
+      await api.exchangeOAuthCode("code-1", start.state);
+      const stored = JSON.parse(readFileSync(file, "utf8"));
+      expect(stored).toMatchObject({ access_token: "signed-in", refresh_token: "rt-1", expires_in: 3600 });
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(new MobileApi({ baseUrl: "https://alza.test", httpFetch }).isAuthenticated).toBe(true);
+    } finally {
+      delete process.env.ALZA_PERSIST_SIGNIN;
+    }
+  });
+
   it("does not load or write anything with ALZA_TOKEN_FILE=none", async () => {
     process.env.ALZA_TOKEN_FILE = "none";
     const alza = mockAlza({ initialAccess: "something-else" });
