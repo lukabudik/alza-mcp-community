@@ -20,6 +20,11 @@ const jsonObject = z.record(z.string(), z.unknown());
 const AUTH_PREREQ =
   "Requires a loaded mobile API access token — check `account_status` first; if none is loaded, run `auth_start`, have the user complete the browser sign-in, then `auth_exchange` with the returned code and state.";
 
+/** `z.enum` needs at least one member; an empty allowlist leaves an enum nothing can match. */
+function actionEnum(actions: readonly string[]) {
+  return actions.length ? z.enum(actions as [string, ...string[]]) : z.never();
+}
+
 /** The whitelisted writes `mutate_list` executes; each is also a guarded MUTATION_ACTIONS entry. */
 const LOW_RISK_ACTIONS = [
   "create", "rename", "delete", "add", "remove", "move", "set_country", "set_isic",
@@ -153,8 +158,9 @@ export function createAccountTools(deps: ToolDeps): RegisterableTool[] {
             "Each action has its own pending token: preparing the same action again replaces its earlier token, tokens prepared for other actions stay valid. " +
             "Do not use for read-only tools, and not for `add_to_cart` (which is a low-risk cart write that needs no token).",
           inputSchema: {
-            // The list assertMutationToken enforces, so the schema cannot drift from it (#112).
-            action: z.enum(MUTATION_ACTIONS).describe("Which mutation you are about to perform; the token will only be accepted by that action's tool."),
+            // The list assertMutationToken enforces, so the schema cannot drift from it (#112),
+            // narrowed by ALZA_MUTATION_ACTIONS_ALLOW.
+            action: actionEnum(deps.mobileAccount.mutationActions).describe("Which mutation you are about to perform; the token will only be accepted by that action's tool."),
             payload: jsonObject.describe("The exact arguments of the mutation call, without `confirmation_token` — e.g. cancel_order: {order_id, part_id, hash, reason}; mutate_list coupon_add: {coupon: \"CODE\"}. Show these to the user when asking for confirmation; the call must repeat them unchanged (omitted defaulted arguments are fine)."),
           },
           annotations: { readOnlyHint: true, idempotentHint: false, destructiveHint: false, openWorldHint: false },
@@ -178,7 +184,7 @@ export function createAccountTools(deps: ToolDeps): RegisterableTool[] {
             "The `payload` fields must match the mobile DTO for the chosen action exactly. " +
             "Side effect: persists the change on the user's Alza account. Example: `mutate_list({action: \"coupon_add\", confirmation_token: \"...\", payload: {coupon: \"WELCOME10\"}})`.",
           inputSchema: {
-            action: z.enum(LOW_RISK_ACTIONS).describe("Which whitelisted mutation to execute; determines the expected `payload` shape."),
+            action: actionEnum(LOW_RISK_ACTIONS.filter((a) => deps.mobileAccount.mutationActions.includes(a))).describe("Which whitelisted mutation to execute; determines the expected `payload` shape."),
             confirmation_token: z.string().min(32).describe("One-time token from `prepare_mutation` prepared with this same `action` and this same `payload`."),
             payload: jsonObject.describe("Mutation payload matching the mobile DTO for `action`, e.g. coupon_add: {coupon: \"CODE\"}; coupon_remove: {couponId: 123}; basket_update: {basket_id: 1, flag: true}."),
           },

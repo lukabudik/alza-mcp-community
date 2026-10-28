@@ -142,13 +142,18 @@ export function parseToolsetsEnv(raw: string | undefined): string[] {
   return ids.includes("all") ? known : [...new Set(ids)];
 }
 
+/** Registered by registerToolsets itself rather than passed in `allTools`. */
+export const TOOLSET_META_TOOLS = ["list_toolsets", "set_toolset", "report_issue"];
+
 export function registerToolsets(
   server: McpServer,
   errorWrap: (name: string, fn: () => Promise<ToolResult>) => Promise<ToolResult>,
   allTools: RegisterableTool[],
   locked: LockedToolsets = {},
   /** Toolset ids enabled at startup in addition to the defaults (see parseToolsetsEnv). Locked ids are skipped. */
-  initiallyEnabled: readonly string[] = []
+  initiallyEnabled: readonly string[] = [],
+  /** ALZA_TOOLS_ALLOW (see allowlist.ts): when set, every other tool is removed and these start enabled. */
+  allowedTools?: ReadonlySet<string>
 ): void {
   for (const id of Object.keys(locked)) {
     if (!TOOLSET_DEFS.some((d) => d.id === id)) throw new Error(`toolset config error: cannot lock unknown toolset "${id}"`);
@@ -174,17 +179,30 @@ export function registerToolsets(
     if (!allNames.has(name)) throw new Error(`toolset config error: "${name}" is assigned to a toolset but never registered`);
   }
 
+  for (const name of allowedTools ?? []) {
+    if (!allNames.has(name) && !TOOLSET_META_TOOLS.includes(name)) throw new Error(`ALZA_TOOLS_ALLOW: unknown tool "${name}"`);
+  }
+  const isAllowed = (name: string) => !allowedTools || allowedTools.has(name);
+
   const registered = new Map<string, RegisteredTool>();
   for (const tool of allTools) {
     registered.set(tool.name, tool.register(server, errorWrap));
   }
   for (const [name, def] of groupByTool) {
-    if (locked[def.id] !== undefined || (!def.defaultEnabled && !startEnabled.has(def.id))) registered.get(name)!.disable();
+    const t = registered.get(name)!;
+    if (!isAllowed(name)) {
+      t.remove();
+      registered.delete(name);
+    } else if (locked[def.id] !== undefined || (!allowedTools && !def.defaultEnabled && !startEnabled.has(def.id))) {
+      t.disable();
+    }
   }
+  // What each toolset still contains after the allowlist; empty toolsets are dropped.
+  const defs = TOOLSET_DEFS.map((d) => ({ ...d, tools: d.tools.filter((n) => registered.has(n)) })).filter((d) => d.tools.length > 0);
 
-  const toolsetIds = TOOLSET_DEFS.map((d) => d.id);
+  const toolsetIds = defs.map((d) => d.id);
 
-  server.registerTool(
+  if (isAllowed("list_toolsets")) server.registerTool(
     "list_toolsets",
     {
       title: "List available toolsets",
@@ -210,7 +228,7 @@ export function registerToolsets(
     },
     async () =>
       errorWrap("list_toolsets", async () => {
-        const toolsets = TOOLSET_DEFS.map((def) => ({
+        const toolsets = defs.map((def) => ({
           id: def.id,
           title: def.title,
           description: def.description,
@@ -226,7 +244,7 @@ export function registerToolsets(
       })
   );
 
-  server.registerTool(
+  if (isAllowed("set_toolset") && toolsetIds.length > 0) server.registerTool(
     "set_toolset",
     {
       title: "Enable or disable a toolset",
@@ -247,14 +265,14 @@ export function registerToolsets(
     },
     async (args: { id: string; enabled: boolean }) =>
       errorWrap("set_toolset", async () => {
-        const defs = args.id === "all" ? TOOLSET_DEFS : TOOLSET_DEFS.filter((d) => d.id === args.id);
-        if (defs.length === 0) throw new Error(`Unknown toolset id: ${args.id}`);
+        const chosen = args.id === "all" ? defs : defs.filter((d) => d.id === args.id);
+        if (chosen.length === 0) throw new Error(`Unknown toolset id: ${args.id}`);
         if (args.enabled && args.id !== "all" && locked[args.id] !== undefined) {
           throw new Error(`Toolset "${args.id}" is locked on this deployment: ${locked[args.id]}`);
         }
         const affected: string[] = [];
         const skipped: string[] = [];
-        for (const def of defs) {
+        for (const def of chosen) {
           // `all` + enabled skips locked groups instead of failing the whole call.
           if (args.enabled && locked[def.id] !== undefined) { skipped.push(def.id); continue; }
           for (const name of def.tools) {

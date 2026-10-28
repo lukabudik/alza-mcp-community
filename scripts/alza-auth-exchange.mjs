@@ -9,13 +9,14 @@
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { oauthFetch, closeOAuthFetch } from "./oauth-fetch.mjs";
 
 const TOKEN_FILE = process.env.ALZA_TOKEN_FILE ?? join(homedir(), ".alza-mcp", "tokens.json");
 const PENDING_FILE = join(homedir(), ".alza-mcp", "pending-login.json");
 // The `alza_Android` OAuth client is confidential — the token endpoint requires
 // the APK-embedded client secret (source-verified + live-verified; see
 // scripts/alza-client-secret.mjs and scripts/e2e-order-payment.browser.mjs).
-const CLIENT_SECRET = process.env.ALZA_CLIENT_SECRET ?? "ZRtjXCjaYFmUbGNvbTK25uctj4nQRT6a";
+const CLIENT_SECRET = process.env.ALZA_OAUTH_CLIENT_SECRET ?? process.env.ALZA_CLIENT_SECRET ?? "ZRtjXCjaYFmUbGNvbTK25uctj4nQRT6a";
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -66,9 +67,9 @@ const main = async () => {
     code: parsed.code,
     redirect_uri: pending.redirectUri,
     code_verifier: pending.verifier,
-    client_secret: CLIENT_SECRET,
+    ...(CLIENT_SECRET ? { client_secret: CLIENT_SECRET } : {}),
   });
-  const res = await fetch(pending.tokenEndpoint, {
+  const res = await oauthFetch(pending.tokenEndpoint, {
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
@@ -97,4 +98,6 @@ const main = async () => {
   chmodSync(TOKEN_FILE, 0o600);
   console.log(JSON.stringify({ ok: true, token_file: TOKEN_FILE, expires_in: store.expires_in, visitor_id: store.visitor_id }, null, 2));
 };
-main().catch((err) => { console.error(err.message ?? err); process.exit(1); });
+main()
+  .catch((err) => { console.error(err.message ?? err); process.exitCode = 1; })
+  .finally(closeOAuthFetch);

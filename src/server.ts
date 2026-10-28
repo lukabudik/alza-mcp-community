@@ -28,6 +28,7 @@ import { createPcBuildCheckTool, createPcBuildSuggestTool } from "./tools/pc-bui
 import { createWatchdogTools } from "./tools/watchdog.js";
 import { parseToolsetsEnv, registerToolsets, type LockedToolsets } from "./tools/toolsets.js";
 import { registerReportIssueTool } from "./tools/report-issue.js";
+import { parseMutationActionsAllowEnv, parseToolsAllowEnv } from "./tools/allowlist.js";
 import { RecentErrors } from "./infra/issue-report.js";
 import { MobileApi } from "./infra/mobile-api.js";
 import { ImpersonateTransport, cfFetch } from "./infra/impersonate-transport.js";
@@ -47,6 +48,10 @@ export interface BuildOptions {
   lockedToolsets?: LockedToolsets;
   /** Toolsets enabled at startup on top of the defaults. Default: `ALZA_TOOLSETS` (see parseToolsetsEnv). */
   enabledToolsets?: readonly string[];
+  /** Tools this deployment exposes; every other one is removed. Default: `ALZA_TOOLS_ALLOW` (see tools/allowlist.ts). */
+  allowedTools?: ReadonlySet<string>;
+  /** `prepare_mutation` actions that may run. Default: `ALZA_MUTATION_ACTIONS_ALLOW` (see tools/allowlist.ts). */
+  allowedMutationActions?: readonly string[];
   /** Auto-load ALZA_TOKEN_FILE (default true; see MobileApiOptions.loadTokenFile). */
   loadTokenFile?: boolean;
   /** Extra sentence appended to the server instructions (e.g. the HTTP-mode note). */
@@ -80,7 +85,8 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
     fetchImpl: cfTransport.available ? cfFetch(cfTransport) : undefined,
     loadTokenFile: opts.loadTokenFile,
   });
-  const mobileAccount = new MobileAccount(mobileApi);
+  const allowedTools = opts.allowedTools ?? parseToolsAllowEnv(process.env.ALZA_TOOLS_ALLOW);
+  const mobileAccount = new MobileAccount(mobileApi, opts.allowedMutationActions ?? parseMutationActionsAllowEnv(process.env.ALZA_MUTATION_ACTIONS_ALLOW));
   // AlzaBox lockers come from the public salesNetwork API, which sits behind the
   // Cloudflare bot wall: reuse MobileApi's sidecar → fetch → browser chain.
   const pickup = new Pickup(browser.locale, { getJson: (url) => mobileApi.request(url) });
@@ -109,6 +115,7 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
         "PC building (enable `pc_builder`): `pc_build_suggest` proposes a compatibility-checked parts list within a CZK budget; `pc_build_check` checks any parts list (socket, RAM, PSU wattage, GPU/cooler clearance, form factor). " +
         "`mobile_read` (toolset `advanced_raw`) is the raw read-only escape hatch for mobile API operations without a dedicated tool. " +
         "If a tool fails unexpectedly or returns clearly wrong data (not a user mistake such as invalid arguments or an unknown product), call `report_issue` (always available) to draft a GitHub issue for the alza-mcp-community maintainers, show the draft to the user, and file it with the returned `gh` command or link only if they agree." +
+        (allowedTools ? ` This deployment exposes only these tools, all enabled from the start (toolset and other tool names above do not apply): ${[...allowedTools].join(", ")}.` : "") +
         (opts.instructionsNote ? ` ${opts.instructionsNote}` : ""),
     }
   );
@@ -144,9 +151,9 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
     ...createWatchdogTools(deps),
     createPcBuildCheckTool(deps),
     createPcBuildSuggestTool(deps),
-  ], opts.lockedToolsets, opts.enabledToolsets ?? parseToolsetsEnv(process.env.ALZA_TOOLSETS));
+  ], opts.lockedToolsets, opts.enabledToolsets ?? parseToolsetsEnv(process.env.ALZA_TOOLSETS), allowedTools);
 
-  registerReportIssueTool(server, errorWrap, {
+  if (!allowedTools || allowedTools.has("report_issue")) registerReportIssueTool(server, errorWrap, {
     recentErrors,
     diagnostics: () => ({
       version: VERSION,
@@ -204,12 +211,15 @@ function isUserError(err: unknown): boolean {
 }
 
 /** `path: message` per issue, bounded: enums and long messages are summarised. */
-export function formatZodIssues(issues: ReadonlyArray<{ path: ReadonlyArray<string | number>; message: string; code?: string; options?: unknown; received?: unknown }>): string {
+export function formatZodIssues(issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string; code?: string; options?: unknown; values?: unknown; received?: unknown }>): string {
   const shown = issues.slice(0, 5).map((i) => {
-    const where = i.path.length ? `${i.path.join(".")}: ` : "";
-    if (i.code === "invalid_enum_value" && Array.isArray(i.options)) {
-      const opts = i.options.length > 8 ? `one of ${i.options.length} allowed values (e.g. ${i.options.slice(0, 4).join(", ")})` : `one of ${i.options.join(", ")}`;
-      return `${where}invalid value ${truncateInput(JSON.stringify(i.received), 40)}; expected ${opts}`;
+    const where = i.path.length ? `${i.path.map(String).join(".")}: ` : "";
+    // Zod 3 reports enums as invalid_enum_value + options, Zod 4 as invalid_value + values.
+    const options = i.code === "invalid_enum_value" ? i.options : i.code === "invalid_value" ? i.values : undefined;
+    if (Array.isArray(options)) {
+      const opts = options.length > 8 ? `one of ${options.length} allowed values (e.g. ${options.slice(0, 4).join(", ")})` : `one of ${options.join(", ")}`;
+      const got = i.received === undefined ? "" : ` ${truncateInput(JSON.stringify(i.received), 40)}`;
+      return `${where}invalid value${got}; expected ${opts}`;
     }
     return `${where}${truncateInput(i.message, 160)}`;
   });
@@ -218,8 +228,18 @@ export function formatZodIssues(issues: ReadonlyArray<{ path: ReadonlyArray<stri
 
 const SDK_VALIDATION = /^(?:MCP error -32602: )?Input validation error: Invalid arguments for tool ([\w.-]+): ([\s\S]*)$/;
 
-/** Rewrite the SDK's raw-JSON input-validation text into `path: message` lines. */
-export function shortenValidationText(text: string): string {
+/** Newer SDKs print one `message at a.b` line per issue; Zod 4 spells an enum miss as
+ * `Invalid option: expected one of "a"|"b"`. */
+const SDK_ISSUE_LINE = /^(.*?)(?: at ([\w.-]+))?$/;
+const ZOD4_ENUM = /^Invalid option: expected one of ((?:"[^"]*"\|?)+)$/;
+
+function valueAt(args: unknown, path: ReadonlyArray<string>): unknown {
+  return path.reduce<unknown>((v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined), args);
+}
+
+/** Rewrite the SDK's input-validation text (raw JSON, or `message at path` lines) into
+ * `path: message` text. `args` are the call's arguments, to echo a rejected enum value. */
+export function shortenValidationText(text: string, args?: unknown): string {
   const m = SDK_VALIDATION.exec(text);
   if (!m) return text;
   try {
@@ -227,7 +247,16 @@ export function shortenValidationText(text: string): string {
     if (Array.isArray(issues) && issues.every((i) => i && typeof i === "object" && typeof i.message === "string")) {
       return `Invalid arguments for ${m[1]} — ${formatZodIssues(issues.map((i) => ({ ...i, path: Array.isArray(i.path) ? i.path : [] })))}`;
     }
-  } catch { /* not JSON: keep the SDK text */ }
+  } catch {
+    const issues = m[2]!.split("\n").filter(Boolean).map((line) => {
+      const [, message = line, at] = SDK_ISSUE_LINE.exec(line) ?? [];
+      const path = at ? at.split(".") : [];
+      const en = ZOD4_ENUM.exec(message);
+      if (!en) return { path, message };
+      return { path, message, code: "invalid_value", values: en[1]!.split("|").map((o) => o.slice(1, -1)), received: valueAt(args, path) };
+    });
+    if (issues.length) return `Invalid arguments for ${m[1]} — ${formatZodIssues(issues)}`;
+  }
   return truncateInput(text, 400);
 }
 
@@ -241,7 +270,7 @@ function hardenToolCalls(server: McpServer): void {
     const params = request.params.arguments === undefined ? { ...request.params, arguments: {} } : request.params;
     const result = (await original({ ...request, params }, extra)) as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
     if (result?.isError && Array.isArray(result.content)) {
-      for (const c of result.content) if (c.type === "text" && typeof c.text === "string") c.text = shortenValidationText(c.text);
+      for (const c of result.content) if (c.type === "text" && typeof c.text === "string") c.text = shortenValidationText(c.text, params.arguments);
     }
     return result as never;
   });
