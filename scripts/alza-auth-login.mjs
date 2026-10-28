@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Interactive OAuth 2.0 Authorization Code + PKCE login for the Alza mobile API.
 //
+// The discovery and token requests go through the curl_cffi sidecar when it is
+// set up (see scripts/oauth-fetch.mjs), because Cloudflare can refuse a plain fetch.
+//
 // Why this exists as a script rather than an MCP tool pair:
 // MobileApi keeps `pendingCodeVerifier` in memory, so alza_auth_start and
 // alza_auth_exchange only work inside ONE process lifetime. The browser step
@@ -20,10 +23,14 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { oauthFetch, closeOAuthFetch } from "./oauth-fetch.mjs";
 
 const AUTHORITY = process.env.ALZA_OAUTH_AUTHORITY ?? "https://identity.alza.cz";
 const CLIENT_ID = process.env.ALZA_OAUTH_CLIENT_ID ?? "alza_Android";
 const REDIRECT_URI = process.env.ALZA_OAUTH_REDIRECT_URI ?? "alza://identity";
+// The `alza_Android` OAuth client is confidential: the token endpoint requires the
+// APK-embedded client secret, as MobileApi.exchangeOAuthCode sends it. "" omits it.
+const CLIENT_SECRET = process.env.ALZA_OAUTH_CLIENT_SECRET ?? process.env.ALZA_CLIENT_SECRET ?? "ZRtjXCjaYFmUbGNvbTK25uctj4nQRT6a";
 const SCOPE = "email openid profile alza offline_access";
 const TOKEN_FILE = process.env.ALZA_TOKEN_FILE ?? join(homedir(), ".alza-mcp", "tokens.json");
 const VISITOR_ID = process.env.ALZA_VISITOR_ID ?? randomUUID();
@@ -43,7 +50,7 @@ const mobileHeaders = (extra = {}) => ({
  * fall back to the APK's built-in IdentityServer defaults (same as MobileApi). */
 async function discovery() {
   try {
-    const res = await fetch(`${AUTHORITY}/.well-known/openid-configuration`, {
+    const res = await oauthFetch(`${AUTHORITY}/.well-known/openid-configuration`, {
       headers: mobileHeaders({ accept: "application/json" }),
     });
     if (res.ok) return await res.json();
@@ -118,8 +125,9 @@ const main = async () => {
     code: parsed.code,
     redirect_uri: REDIRECT_URI,
     code_verifier: verifier,
+    ...(CLIENT_SECRET ? { client_secret: CLIENT_SECRET } : {}),
   });
-  const res = await fetch(tokenEndpoint, {
+  const res = await oauthFetch(tokenEndpoint, {
     method: "POST",
     headers: mobileHeaders({ "content-type": "application/x-www-form-urlencoded", accept: "application/json" }),
     body,
@@ -146,7 +154,9 @@ const main = async () => {
   console.log("\nNext: node scripts/alza-auth-smoke.mjs");
 };
 
-main().catch((err) => {
-  console.error(`\nLogin failed: ${err.message}`);
-  process.exit(1);
-});
+main()
+  .catch((err) => {
+    console.error(`\nLogin failed: ${err.message}`);
+    process.exitCode = 1;
+  })
+  .finally(closeOAuthFetch);
