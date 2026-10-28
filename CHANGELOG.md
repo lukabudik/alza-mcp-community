@@ -6,7 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-27
+
+### Changed
+- **Renamed to `alza-mcp-community`**, at Alza's request, so the name makes clear this is an unofficial project, not made or supported by Alza. The npm package, binary, GitHub repository and MCP Registry name (`io.github.lukabudik/alza-mcp-community`) all changed. Update your MCP config from `npx -y alza-mcp` to `npx -y alza-mcp-community`. The old `alza-mcp` npm package is deprecated and points here. Saved logins in `~/.alza-mcp/` and all `ALZA_*` environment variables are unchanged.
+- The server title shown in MCP clients is now "Alza (unofficial, community)".
+- `prepare_mutation`'s `action` enum is now `MUTATION_ACTIONS`, the list `assertMutationToken` enforces, instead of a hand-kept copy, so a guarded mutation can no longer be missing from the schema (the cause of [#112](https://github.com/lukabudik/alza-mcp-community/issues/112), where `cancel_order` could get no token; fixed in v0.4.0). `mutate_list`'s actions are type-checked as a subset, and the test now compares the full list.
+- SECURITY.md no longer says private vulnerability reporting is available: it may not be enabled on the repository, so the documented interim channel is a minimal public issue (no technical details) asking for a private contact channel.
+- GitHub repository links in the changelog now point to `lukabudik/alza-mcp-community`, the repository's new name (the old URLs still redirect). The repository URL fields in `package.json`, `server.json` and `mcpb/manifest.json`, the `report_issue` repo and `gh` commands, and the docs already used the new name since 0.6.0. The npm trusted-publisher entry must name `lukabudik/alza-mcp-community`.
+
 ### Added
+- README: a notice under the title that the project is unofficial; every contributor credited under Contributors.
 - `ALZA_PERSIST_SIGNIN=1`: an in-process sign-in (`auth_start` → `auth_exchange`) is written to `ALZA_TOKEN_FILE` (0600, atomic) and refreshed there, so a long-lived deployment can be signed in through the running server, whose token exchange uses the same transport chain as every other account request, and stay signed in across restarts. Default unchanged: an in-process sign-in is never written over the store. Test: `test/token-refresh.test.ts`.
 - `ALZA_TOOLS_ALLOW` and `ALZA_MUTATION_ACTIONS_ALLOW`: operator allowlists for handing the server to an agent you do not fully trust, e.g. as a remote connector. Tools outside `ALZA_TOOLS_ALLOW` are removed after registration (not just disabled), so `set_toolset` cannot bring them back; `list_toolsets`, `set_toolset` and `report_issue` are subject to it too, and the allowed tools are enabled from the start. `prepare_mutation` refuses a token for an action outside `ALZA_MUTATION_ACTIONS_ALLOW`, and so does every guarded write, so e.g. `mutate_list` `submit_discussion` cannot publish under the user's name while coupons and watchdogs still work. The `action` enums of `prepare_mutation` and `mutate_list` shrink to the list. Unknown tool or action names stop the server at startup. Tests: `test/allowlist.test.ts`.
 - The lowest-payable-price feature (promo-code `priceNow`/`promoCode`, AlzaPlus+ `alzaPlusPrice`, opened-box `condition`/`newPrice`) is implemented and tested for **both alza.sk and alza.cz**. alza.cz uses the same markup with Czech wording and number format ("Koupit s kódem ALZADNY20", `3 192,-`, "Rozbaleno - skladem 2 ks", "Nový 3 994,-"). Live-verified 2026-10-18 on alza.cz: the `/lcd-monitory/18842948.htm` listing (21 of 24 cards with a code, AlzaPlus+ on 2, price check passing), an opened-box card, a product page's promo block, and end-to-end `get_product` / `compare_products` through the server. Fixtures: `test/fixtures/deals-sk-boxes.html` (alza.sk) and `test/fixtures/deals-cz-boxes.html` (alza.cz); tests: `test/get-deals-sk.test.ts`, `test/get-deals-cz.test.ts`.
@@ -30,20 +40,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The server no longer accepts requests before the MCP `initialize` handshake ([#80](https://github.com/lukabudik/alza-mcp-community/issues/80)). The SDK allows them by default, so every transport is now wrapped in `InitializeGuardTransport` (`src/infra/initialize-guard.ts`, used for stdio and for each Streamable HTTP session): until the `initialize` request has been answered successfully, any request other than `initialize` and `ping` gets a JSON-RPC `-32002` ("Server not initialized") error and never reaches a handler, and notifications are ignored. Nothing changes after the handshake; stdio still answers malformed JSON with `-32700`. HTTP already refused sessionless requests, so the guard there only closes the window between session creation and the initialize response. Tests: raw JSON-RPC over an in-memory pair, a stdio child process, and HTTP.
 - `search_products` no longer rejects a blank query for facet or range searches (category + `producer_ids`, `filters` or `ranges`), which go through the category-browse path that ignores the query. The QA blank-query check had broken `scripts/validate-api.ts`' "category + producer" check; the canary now passes it again.
 - `get_product` / `compare_products` / PC-builder stock: availability now comes from the visible `.av-container` line on the product page instead of JSON-LD alone. Live-verified 2026-10-08: YUBIK002a10 had JSON-LD `InStock` while the page said "Na objednávku – termín upřesníme". The JSON-LD value remains the fallback, and `inStockFrom` understands the Czech texts (`Skladem…` true; `Na objednávku`, `Není skladem`, … false).
-
-### Changed
-- `prepare_mutation`'s `action` enum is now `MUTATION_ACTIONS`, the list `assertMutationToken` enforces, instead of a hand-kept copy, so a guarded mutation can no longer be missing from the schema (the cause of [#112](https://github.com/lukabudik/alza-mcp-community/issues/112), where `cancel_order` could get no token; fixed in v0.4.0). `mutate_list`'s actions are type-checked as a subset, and the test now compares the full list.
-- SECURITY.md no longer says private vulnerability reporting is available: it may not be enabled on the repository, so the documented interim channel is a minimal public issue (no technical details) asking for a private contact channel.
-- GitHub repository links in the changelog now point to `lukabudik/alza-mcp-community`, the repository's new name (the old URLs still redirect). The repository URL fields in `package.json`, `server.json` and `mcpb/manifest.json`, the `report_issue` repo and `gh` commands, and the docs already used the new name since 0.6.0. The npm trusted-publisher entry must name `lukabudik/alza-mcp-community`.
-
-## [0.6.0] — 2026-10-07
-
-### Changed
-- **Renamed to `alza-mcp-community`**, at Alza's request, so the name makes clear this is an unofficial project, not made or supported by Alza. The npm package, binary, GitHub repository and MCP Registry name (`io.github.lukabudik/alza-mcp-community`) all changed. Update your MCP config from `npx -y alza-mcp` to `npx -y alza-mcp-community`. The old `alza-mcp` npm package is deprecated and points here. Saved logins in `~/.alza-mcp/` and all `ALZA_*` environment variables are unchanged.
-- The server title shown in MCP clients is now "Alza (unofficial, community)".
-
-### Added
-- README: a notice under the title that the project is unofficial; @jankryh added to Contributors.
 
 ## [0.5.0] — 2026-10-07
 
