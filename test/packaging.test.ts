@@ -76,7 +76,10 @@ describe("ensure-cf-venv.sh", () => {
     expect(script).not.toContain("--upgrade pip");
   });
 
-  const hasVenv = spawnSync("python3", ["-c", "import ensurepip, venv"]).status === 0;
+  // POSIX only: the script needs bash, and on Windows `python3` is usually the Microsoft Store
+  // alias, which crashes vitest's forks pool when spawned (AssignProcessToJobObject, issue #120).
+  // Windows uses `--setup-cf` (src/infra/setup-cf.ts), tested in setup-cf.test.ts.
+  const hasVenv = process.platform !== "win32" && spawnSync("python3", ["-c", "import ensurepip, venv"]).status === 0;
   it.skipIf(!hasVenv)("removes the venv it created when the pip install fails", () => {
     const base = mkdtempSync(path.join(tmpdir(), "alza-venv-"));
     mkdirSync(path.join(base, "scripts"));

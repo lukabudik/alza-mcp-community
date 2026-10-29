@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const browserTs = fileURLToPath(new URL("../src/infra/browser.ts", import.meta.url));
+// A file:// URL, not a path: ESM `import` rejects a bare Windows path (C:\...) as an unknown URL scheme.
+const browserTs = new URL("../src/infra/browser.ts", import.meta.url).href;
 
 /** Runs ensureChromiumInstalled with a fake installer in a child process so its stdout can be inspected. */
 function run(installerScript: string) {
