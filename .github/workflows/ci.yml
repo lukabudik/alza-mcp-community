@@ -30,3 +30,18 @@ jobs:
           npm init -y > /dev/null
           ALZA_MCP_SKIP_INSTALL= npm install "$RUNNER_TEMP"/alza-mcp-community-*.tgz
           test -x node_modules/.bin/alza-mcp-community
+
+  # Windows has its own failure modes (paths, file URLs, no POSIX shell; issue #120),
+  # so the suite runs there too.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

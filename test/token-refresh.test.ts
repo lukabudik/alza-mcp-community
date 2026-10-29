@@ -236,7 +236,7 @@ describe("#66: refreshed tokens are written back to ALZA_TOKEN_FILE", () => {
       await api.exchangeOAuthCode("code-1", start.state);
       const stored = JSON.parse(readFileSync(file, "utf8"));
       expect(stored).toMatchObject({ access_token: "signed-in", refresh_token: "rt-1", expires_in: 3600 });
-      expect(statSync(file).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600); // no POSIX modes on Windows
       expect(new MobileApi({ baseUrl: "https://alza.test", httpFetch }).isAuthenticated).toBe(true);
     } finally {
       delete process.env.ALZA_PERSIST_SIGNIN;

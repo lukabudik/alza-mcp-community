@@ -23,8 +23,13 @@ const alive = (pid: number) => {
   }
 };
 
+// The fake interpreter below is a `#!/bin/sh` script. Windows cannot run it: the server starts
+// ALZA_CF_PYTHON with execFile/spawn (no shell), which only accepts real executables there, and
+// Node refuses to run .cmd/.bat files without a shell. The shutdown path itself is not POSIX-only.
+const posixOnly = process.platform === "win32";
+
 describe("stdio server lifecycle", () => {
-  it("exits with code 0 and stops the sidecar when the host closes stdin", async () => {
+  it.skipIf(posixOnly)("exits with code 0 and stops the sidecar when the host closes stdin", async () => {
     const dir = mkdtempSync(join(tmpdir(), "alza-mcp-community-stdio-"));
     const pidFile = join(dir, "sidecar.pid");
     // Fake "python": passes the `-c "import curl_cffi"` probe, then behaves like a sidecar that

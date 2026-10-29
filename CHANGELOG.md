@@ -6,9 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `--setup-cf` on Windows: when pip or the `curl_cffi` import check fails and the venv path is longer than 150 characters, it now says the path likely exceeds Windows' 260-character limit and how to fix it (enable `LongPathsEnabled`, or install in a shorter folder and set `ALZA_CF_PYTHON`), instead of only blaming `curl_cffi` (#119).
+- The test suite runs on Windows: `browser-install` imports a `file://` URL instead of a bare `C:\` path, the setup-cf real run looks for `Scripts\python.exe`, the token-file mode check is POSIX-only like the one before it, and the two tests that need a POSIX shell are skipped there with the reason stated (#120).
+
+### Changed
+- CI also runs typecheck, tests and build on `windows-latest` (#120).
+
 ### Documentation
 - `ARCHITECTURE.md` rewritten to match the current code: both transports (Playwright and the `curl_cffi` sidecar), the full module map, toolsets, one-time mutation tokens, HTTP mode and allowlists, all caches, every typed error, and the daily canary. Removed the outdated "no login / cart / order" and "no mobile API" anti-features.
-- `ROADMAP.md`: PC builder (#15) and watchdogs (#17) moved to Shipped; Windows bugs (#118–#120) added to near-term; #22 status updated.
+- `ROADMAP.md`: PC builder (#15) and watchdogs (#17) moved to Shipped; the open Windows install bug (#118) added to near-term; #22 status updated.
 - `CONTRIBUTING.md` project layout and `README.md` architecture diagram, reviews source, `validate:api` scope and roadmap updated.
 
 ## [0.6.0] — 2026-10-27

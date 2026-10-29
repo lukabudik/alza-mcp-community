@@ -35,6 +35,23 @@ export function systemPythons(platform: NodeJS.Platform): string[][] {
   return platform === "win32" ? [["py", "-3"], ["python"], ["python3"]] : [["python3"], ["python"]];
 }
 
+/** Venv paths longer than this leave little room under Windows' 260-character MAX_PATH for
+ * curl_cffi's own files (Lib\site-packages\curl_cffi\...), so a failure there is likely the
+ * path, not the package (issue #119). */
+export const WINDOWS_LONG_VENV_PATH = 150;
+
+/** Explains a likely MAX_PATH failure on Windows, or returns undefined when the path is short. */
+export function longPathHint(venv: string, platform: NodeJS.Platform): string | undefined {
+  if (platform !== "win32" || venv.length <= WINDOWS_LONG_VENV_PATH) return undefined;
+  return (
+    `cf-venv: the venv path is ${venv.length} characters long, so curl_cffi's files probably exceed Windows' ` +
+    "260-character path limit (MAX_PATH). Either enable long paths (set the registry value " +
+    "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled to 1, then open a new terminal) " +
+    "and run --setup-cf again, or install alza-mcp-community in a shorter folder (npm install alza-mcp-community " +
+    "in e.g. C:\\alza), run --setup-cf there and set ALZA_CF_PYTHON to the interpreter it prints."
+  );
+}
+
 /**
  * Create (idempotently) the .venv-cf holding curl_cffi. Never runs implicitly:
  * only via `alza-mcp-community --setup-cf`. Returns the process exit code.
@@ -74,9 +91,13 @@ export async function runSetupCf(opts: SetupCfOptions = {}): Promise<number> {
   }
 
   const created = !existsSync(venv);
+  // Set once the venv exists: only pip/import failures can be MAX_PATH failures.
+  let installing = false;
   const fail = (msg: string, r?: RunResult): number => {
     err(`cf-venv: ${msg}`);
     if (r) err((r.stderr || r.stdout || String(r.error ?? "")).trim().split("\n").slice(-5).join("\n"));
+    const hint = installing ? longPathHint(venv, platform) : undefined;
+    if (hint) err(hint);
     if (created) {
       rmSync(venv, { recursive: true, force: true });
       err(`cf-venv: setup failed; removed the partial venv (${venv})`);
@@ -86,6 +107,7 @@ export async function runSetupCf(opts: SetupCfOptions = {}): Promise<number> {
 
   let r = run(python[0]!, [...python.slice(1), "-m", "venv", venv]);
   if (r.error || r.status !== 0) return fail("could not create the venv (is the Python venv module installed?)", r);
+  installing = true;
   r = run(venvPy, ["-m", "pip", "install", "--quiet", CURL_CFFI_SPEC]);
   if (r.error || r.status !== 0) return fail(`pip install ${CURL_CFFI_SPEC} failed`, r);
   r = run(venvPy, ["-c", "import curl_cffi; print(curl_cffi.__version__)"]);
