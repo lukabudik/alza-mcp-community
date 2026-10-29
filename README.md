@@ -328,11 +328,11 @@ No generic arbitrary-route tool is exposed. What is and isn't covered:
 
 The complete 12-family route inventory with method, DTO, prerequisites, side effects, exposure, and verification status is maintained in [docs/mobile-endpoint-coverage.md](docs/mobile-endpoint-coverage.md).
 
-Legacy catalog compatibility still uses the original page adapter:
+The catalog tools still use the browser page adapter:
 
 - Search navigates `/search.htm?exps=...` and scrapes `.browsingitem` cards.
-- Product detail comes from page JSON-LD.
-- Reviews use JSON-LD aggregate ratings.
+- Product detail comes from page JSON-LD, with spec params from the page.
+- Reviews take the aggregate rating from JSON-LD and individual reviews from the mobile reviews API.
 - Pickup points combine branch data and geocoding.
 - Per-process caching remains enabled.
 
@@ -340,12 +340,13 @@ Image, font, and analytics requests are blocked at the route level. Catalog page
 
 ```
 ┌────────────────────────────────────────────┐
-│ stdio transport (npx alza-mcp-community)             │
+│ stdio (default) or Streamable HTTP (--http)│
 ├────────────────────────────────────────────┤
 │ MCP tools / resources / prompts            │
 │  grouped into toolsets (toolsets.ts)       │
 ├────────────────────────────────────────────┤
 │ Domain: catalog · reviews · pickup ·       │
+│         deals · watchdog · pc-build ·      │
 │         mobile-account (cart/checkout/…)   │
 ├────────────────────────────────────────────┤
 │ Infra:                                     │
@@ -359,7 +360,7 @@ Image, font, and analytics requests are blocked at the route level. Catalog page
 └────────────────────────────────────────────┘
 ```
 
-For deeper architecture notes — including why we don't ship the HTTP/okhttp recipe — see [ARCHITECTURE.md](ARCHITECTURE.md).
+For deeper architecture notes — including why there are two transports and why we don't ship the okhttp cookie recipe — see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
@@ -375,7 +376,7 @@ npm test                    # unit tests, no network
 npm run typecheck
 npm run build               # → dist/
 npm run eval                # agent-driven MCP eval harness (6 scenarios) → docs/live-evidence/
-npm run validate:api        # hits real Alza — runs every tool end-to-end
+npm run validate:api        # hits real Alza — runs every read-only catalog tool (also the daily canary)
 npm run pentest:app-action  # Node AppAction transport comparison
 npm run live:endpoint-matrix # bounded read-only APK route matrix; requires ALZA_API_BASE_URL
 npm run live:user-journeys   # catalog, delivery/cart, and anonymous-account journeys
@@ -403,9 +404,10 @@ node dist/index.js --http   # or serve MCP Streamable HTTP on http://127.0.0.1:3
 
 ## Roadmap
 
-`main` already covers catalog, filtering, cart, checkout, order placement/cancellation and account management (see [What it does](#what-it-does) and the known limitations in [docs/gap-analysis.md](docs/gap-analysis.md)). Next up:
+`main` already covers catalog, filtering, cart, checkout, order placement/cancellation, account management, watchdogs and the PC builder (see [What it does](#what-it-does) and the known limitations in [docs/gap-analysis.md](docs/gap-analysis.md)). Next up:
 
-- **PC builder** follow-ups ([#15](https://github.com/lukabudik/alza-mcp-community/issues/15); `pc_builder` toolset shipped) and a **hosted HTTP endpoint** (follow-up to [#16](https://github.com/lukabudik/alza-mcp-community/issues/16); local `--http` mode is shipped)
+- **Windows fixes** ([#118](https://github.com/lukabudik/alza-mcp-community/issues/118), [#119](https://github.com/lukabudik/alza-mcp-community/issues/119), [#120](https://github.com/lukabudik/alza-mcp-community/issues/120))
+- **PC builder** follow-ups and a **hosted HTTP endpoint** (follow-up to [#16](https://github.com/lukabudik/alza-mcp-community/issues/16); local `--http` mode is shipped)
 
 Priorities live in [ROADMAP.md](ROADMAP.md); everything is tracked in [issues](https://github.com/lukabudik/alza-mcp-community/issues) — [`good first issue`](https://github.com/lukabudik/alza-mcp-community/labels/good%20first%20issue) is the place to start.
 
