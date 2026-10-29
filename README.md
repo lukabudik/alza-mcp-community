@@ -406,7 +406,7 @@ node dist/index.js --http   # or serve MCP Streamable HTTP on http://127.0.0.1:3
 
 `main` already covers catalog, filtering, cart, checkout, order placement/cancellation, account management, watchdogs and the PC builder (see [What it does](#what-it-does) and the known limitations in [docs/gap-analysis.md](docs/gap-analysis.md)). Next up:
 
-- **Windows fixes** ([#118](https://github.com/lukabudik/alza-mcp-community/issues/118), [#119](https://github.com/lukabudik/alza-mcp-community/issues/119), [#120](https://github.com/lukabudik/alza-mcp-community/issues/120))
+- **Windows**: the Playwright postinstall failure ([#118](https://github.com/lukabudik/alza-mcp-community/issues/118)); the test suite now runs on Windows in CI
 - **PC builder** follow-ups and a **hosted HTTP endpoint** (follow-up to [#16](https://github.com/lukabudik/alza-mcp-community/issues/16); local `--http` mode is shipped)
 
 Priorities live in [ROADMAP.md](ROADMAP.md); everything is tracked in [issues](https://github.com/lukabudik/alza-mcp-community/issues) — [`good first issue`](https://github.com/lukabudik/alza-mcp-community/labels/good%20first%20issue) is the place to start.

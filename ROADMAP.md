@@ -16,7 +16,7 @@ Rough priority order. Every item is a GitHub issue — comment there before star
 
 ## Near-term
 
-- Windows support fixes: [#118](https://github.com/lukabudik/alza-mcp-community/issues/118) postinstall `MODULE_NOT_FOUND` in playwright-core, [#119](https://github.com/lukabudik/alza-mcp-community/issues/119) `--setup-cf` and `MAX_PATH`, [#120](https://github.com/lukabudik/alza-mcp-community/issues/120) failing tests on Windows (CI runs on Linux only)
+- [#118](https://github.com/lukabudik/alza-mcp-community/issues/118) postinstall `MODULE_NOT_FOUND` inside playwright-core 1.64.1 (reported on Windows; needs a Windows repro, then pin or report upstream)
 - [#22](https://github.com/lukabudik/alza-mcp-community/issues/22) One-click install — links and `.mcpb` bundle shipped and Docker-tested; needs a confirmation on macOS or Windows Claude Desktop
 - [#20](https://github.com/lukabudik/alza-mcp-community/issues/20) List in MCP directories (Smithery, Glama, PulseMCP, mcp.so)
 

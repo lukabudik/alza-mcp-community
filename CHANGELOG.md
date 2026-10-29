@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Documentation
 - `ARCHITECTURE.md` rewritten to match the current code: both transports (Playwright and the `curl_cffi` sidecar), the full module map, toolsets, one-time mutation tokens, HTTP mode and allowlists, all caches, every typed error, and the daily canary. Removed the outdated "no login / cart / order" and "no mobile API" anti-features.
-- `ROADMAP.md`: PC builder (#15) and watchdogs (#17) moved to Shipped; Windows bugs (#118–#120) added to near-term; #22 status updated.
+- `ROADMAP.md`: PC builder (#15) and watchdogs (#17) moved to Shipped; the open Windows install bug (#118) added to near-term; #22 status updated.
 - `CONTRIBUTING.md` project layout and `README.md` architecture diagram, reviews source, `validate:api` scope and roadmap updated.
 
 ## [0.6.0] — 2026-10-27
