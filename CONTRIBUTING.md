@@ -45,17 +45,22 @@ Suites that do not apply to the tree (no badges, no `mcpb/`, no `--http`) report
 
 ```
 src/
-  index.ts          # stdio entrypoint
+  index.ts          # entrypoint: stdio (default), --http, --setup-cf
+  http.ts           # Streamable HTTP transport (per-session servers)
   server.ts         # builds the McpServer; testable
-  infra/            # HTTP client, locale, JSON-LD, cache, errors, logger
-  domain/           # catalog / reviews / pickup
-  tools/            # one file per MCP tool
+  infra/            # browser, mobile-API client, curl_cffi sidecar client, AppAction executor,
+                    # proxy, locale, JSON-LD, cache, errors, logger
+  domain/           # catalog, reviews, pickup, deals, watchdog, PC builder, mobile-account (cart/checkout/orders)
+  tools/            # MCP tools (mostly one file per tool), toolsets, allowlists, output schemas
   resources/        # alza:// resource handlers
   prompts/          # MCP prompt templates
   data/             # static datasets (e.g. branches)
-test/               # vitest tests + fixtures
-scripts/            # validate-api & ops scripts
+test/               # vitest tests + fixtures; test/docker/ holds the install-test harness
+scripts/            # validate-api, eval, auth helpers, cf-transport sidecar, live and e2e scripts
+docs/               # endpoint coverage matrix, gap analysis, live evidence
 ```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full module map.
 
 ## Adding a new tool
 
