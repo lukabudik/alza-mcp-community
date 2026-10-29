@@ -5,7 +5,7 @@ import type { RegisterableTool, ToolResult } from "./types.js";
 /**
  * Progressive tool disclosure (MCP client-best-practices S3; Anthropic's
  * "few thoughtful tools" guidance, S4/S5 in docs/mcp-best-practices-audit.md):
- * with 53 raw operations, listing everything on every `tools/list` call
+ * with 63 domain tools, listing everything on every `tools/list` call
  * front-loads an agent's context with dozens of tools it may never touch in
  * a given conversation. Instead, only `catalog` (product discovery) and
  * `auth` (the bootstrap/handshake tools every other flow needs first) are
@@ -15,7 +15,7 @@ import type { RegisterableTool, ToolResult } from "./types.js";
  * `.disable()` fire the standard `notifications/tools/list_changed`
  * notification, so clients that support it see the change live.
  *
- * Every one of the 53 tool names must appear in exactly one group below —
+ * Every one of the 63 domain tool names must appear in exactly one group below —
  * `registerToolsets` asserts this at startup so a newly added tool can never
  * be silently unreachable (AGENTS.md: never silently omit an operation).
  */
