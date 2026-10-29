@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { informationalOutput, isSetupCf } from "../src/cli.js";
-import { runSetupCf, venvPythonPath, type RunResult, type Runner } from "../src/infra/setup-cf.js";
+import { longPathHint, runSetupCf, venvPythonPath, WINDOWS_LONG_VENV_PATH, type RunResult, type Runner } from "../src/infra/setup-cf.js";
 
 const roots: string[] = [];
 const tmp = () => {
@@ -109,6 +109,47 @@ describe("alza-mcp-community --setup-cf", () => {
     expect(h.calls.some((c) => c.startsWith("C:\\pkg\\.venv-cf\\Scripts\\python.exe -m pip install"))).toBe(true);
   });
 
+  describe("long install paths on Windows (issue #119)", () => {
+    const deep = "C:\\Users\\someone\\AppData\\Local\\npm-cache\\_npx\\" + "x".repeat(WINDOWS_LONG_VENV_PATH) + "\\node_modules\\alza-mcp-community";
+    const pyWin = (failOn: "pip" | "import" | "venv") => (_c: string, args: string[]): Partial<RunResult> => {
+      if (args.includes("--version")) return { stdout: "Python 3.12.0" };
+      if (failOn === "venv" && args.includes("venv")) return { status: 1, stderr: "venv failed" };
+      if (failOn === "pip" && args.includes("pip")) return { status: 1, stderr: "OSError: [Errno 2] No such file or directory" };
+      if (failOn === "import" && args[1]?.includes("__version__")) return { status: 1, stderr: "ImportError: DLL load failed" };
+      return { stdout: "0.16.3" };
+    };
+
+    it("explains MAX_PATH when the import check fails in a long path", async () => {
+      const h = harness(deep, "win32", pyWin("import"));
+      expect(await runSetupCf(h.opts)).toBe(1);
+      const err = h.err.join("\n");
+      expect(err).toContain("curl_cffi installed but cannot be imported");
+      expect(err).toContain("MAX_PATH");
+      expect(err).toContain("LongPathsEnabled");
+      expect(err).toContain("ALZA_CF_PYTHON");
+    });
+
+    it("explains MAX_PATH when pip fails in a long path", async () => {
+      const h = harness(deep, "win32", pyWin("pip"));
+      expect(await runSetupCf(h.opts)).toBe(1);
+      expect(h.err.join("\n")).toContain("MAX_PATH");
+    });
+
+    it("does not blame the path when the venv itself could not be created", async () => {
+      const h = harness(deep, "win32", pyWin("venv"));
+      expect(await runSetupCf(h.opts)).toBe(1);
+      expect(h.err.join("\n")).not.toContain("MAX_PATH");
+    });
+
+    it("says nothing about the path for a short path, or on other platforms", async () => {
+      const h = harness("C:\\alza", "win32", pyWin("import"));
+      expect(await runSetupCf(h.opts)).toBe(1);
+      expect(h.err.join("\n")).not.toContain("MAX_PATH");
+      expect(longPathHint("/" + "x".repeat(300), "linux")).toBeUndefined();
+      expect(longPathHint("C:\\" + "x".repeat(300), "win32")).toContain("MAX_PATH");
+    });
+  });
+
   const havePy = spawnSync("python3", ["-c", "import venv, ensurepip"]).status === 0;
   it.skipIf(!havePy)(
     "real run against a temp dir",
@@ -117,7 +158,7 @@ describe("alza-mcp-community --setup-cf", () => {
       const out: string[] = [];
       const code = await runSetupCf({ root, env: {}, out: (l) => out.push(l), err: (l) => out.push(l) });
       // pip may be offline: success must leave an importable venv, failure must clean up
-      if (code === 0) expect(existsSync(path.join(root, ".venv-cf", "bin", "python"))).toBe(true);
+      if (code === 0) expect(existsSync(venvPythonPath(root, process.platform))).toBe(true);
       else expect(existsSync(path.join(root, ".venv-cf"))).toBe(false);
       if (code === 0) expect(await runSetupCf({ root, env: {}, out: (l) => out.push(l) })).toBe(0);
     },

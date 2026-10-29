@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `--setup-cf` on Windows: when pip or the `curl_cffi` import check fails and the venv path is longer than 150 characters, it now says the path likely exceeds Windows' 260-character limit and how to fix it (enable `LongPathsEnabled`, or install in a shorter folder and set `ALZA_CF_PYTHON`), instead of only blaming `curl_cffi` (#119).
+- The test suite runs on Windows: `browser-install` imports a `file://` URL instead of a bare `C:\` path, and the two tests that need a POSIX shell are skipped there with the reason stated (#120).
+
+### Changed
+- CI also runs typecheck, tests and build on `windows-latest` (#120).
+
 ## [0.6.0] — 2026-10-27
 
 ### Changed
