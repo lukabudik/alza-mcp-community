@@ -101,6 +101,8 @@ When Alza changes an endpoint shape:
 
 `server.json` (the official MCP Registry manifest) and `mcpb/manifest.json` (the Claude Desktop bundle) are bumped together with `package.json`: `npm version <patch|minor|major>` runs `scripts/sync-version.cjs` (the npm `version` lifecycle script), which sets `server.json`'s top-level `version` and `packages[0].version` `mcpb/manifest.json`'s `version` and the `VERSION` constant in `src/server.ts`, and stages those files into the version commit. `npm run version:check` reports a mismatch without changing anything. The release workflow (`.github/workflows/publish.yml`) fails before `npm publish` if any of them differ, then publishes to the registry via `mcp-publisher` (OIDC login) after the npm publish. Keep `description` at 100 characters or fewer (registry limit).
 
+Playwright is pinned to a patch range (`~1.x.y`) because the published package ships without a lockfile. To move to a newer minor, bump the range in `package.json`, regenerate the lockfile with `npm install`, and let CI pass on Linux and Windows (#118).
+
 ## Code of conduct
 
 Be kind. This is a hobby project run by volunteers.
