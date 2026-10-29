@@ -12,11 +12,10 @@ Rough priority order. Every item is a GitHub issue — comment there before star
 - **Progressive disclosure** — tools grouped into toolsets; only `catalog` and `auth` are enabled by default.
 - **Streamable HTTP transport** — `alza-mcp-community --http` for local multi-session use (catalog-only unless account access is opted in).
 - **Operator controls** — `ALZA_TOOLS_ALLOW` / `ALZA_MUTATION_ACTIONS_ALLOW` allowlists, `ALZA_PROXY_URL`, and `ALZA_PERSIST_SIGNIN` (0.6.0).
-- **Distribution** — published on npm as `alza-mcp-community`, CI on Node 20/22, trusted publishing on tag push; `server.json` and `smithery.yaml` in the repo, published to the official MCP Registry from the release workflow ([#19](https://github.com/lukabudik/alza-mcp-community/issues/19), 0.4.0). Cursor and VS Code install badges plus a Claude Desktop `.mcpb` bundle attached to each release.
+- **Distribution** — published on npm as `alza-mcp-community`, CI on Node 20/22 (Linux) and Windows, trusted publishing on tag push; `server.json` and `smithery.yaml` in the repo, published to the official MCP Registry from the release workflow ([#19](https://github.com/lukabudik/alza-mcp-community/issues/19), 0.4.0). Cursor and VS Code install badges plus a Claude Desktop `.mcpb` bundle attached to each release.
 
 ## Near-term
 
-- [#118](https://github.com/lukabudik/alza-mcp-community/issues/118) postinstall `MODULE_NOT_FOUND` inside playwright-core 1.64.1 (reported on Windows; needs a Windows repro, then pin or report upstream)
 - [#22](https://github.com/lukabudik/alza-mcp-community/issues/22) One-click install — links and `.mcpb` bundle shipped and Docker-tested; needs a confirmation on macOS or Windows Claude Desktop
 - [#20](https://github.com/lukabudik/alza-mcp-community/issues/20) List in MCP directories (Smithery, Glama, PulseMCP, mcp.so)
 

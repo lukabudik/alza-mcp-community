@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The test suite runs on Windows: `browser-install` imports a `file://` URL instead of a bare `C:\` path, the setup-cf real run looks for `Scripts\python.exe`, the token-file mode check is POSIX-only like the one before it, and the two tests that need a POSIX shell are skipped there with the reason stated (#120).
 
 ### Changed
+- Playwright is pinned to `~1.59.1` (patch updates only) instead of `^1.59.1`. The published package has no lockfile, so `npx`/`npm i` used to pick up every new Playwright minor, and a broken one could break our postinstall with no change on our side, as reported with 1.64.1 on Windows (#118). Newer minors are adopted on purpose, after CI on Linux and Windows.
 - CI also runs typecheck, tests and build on `windows-latest` (#120).
 
 ### Documentation
