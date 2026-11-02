@@ -36,6 +36,9 @@ import { TOOLSET_DEFS, type LockedToolsets } from "./tools/toolsets.js";
  *    HTTP mode unless the operator additionally sets `ALZA_HTTP_ALLOW_TOKEN_FILE=1`
  *    — meant for a single-user localhost setup only; every session then starts
  *    signed in as that one account.
+ *  - Likewise the signed-in web session (`ALZA_WEB_SESSION_FILE`, written by
+ *    `--login`) is not loaded unless the operator sets `ALZA_HTTP_ALLOW_WEB_SESSION=1`;
+ *    every session's catalog reads then show that one account's prices.
  *  - Binds to 127.0.0.1 by default and validates `Host`/`Origin` against an
  *    allow-list (DNS-rebinding protection for a localhost server).
  */
@@ -55,6 +58,8 @@ export interface HttpServerOptions {
   allowAccount?: boolean;
   /** Auto-load ALZA_TOKEN_FILE into every session (ALZA_HTTP_ALLOW_TOKEN_FILE=1). Requires allowAccount. Default false. */
   allowTokenFile?: boolean;
+  /** Load the operator's signed-in web session into the catalog browser (ALZA_HTTP_ALLOW_WEB_SESSION=1). Default false. */
+  allowWebSession?: boolean;
   /** Accepted Host/Origin hostnames. Default: loopback names when bound to loopback, otherwise no check. */
   allowedHosts?: string[];
   /** Concurrent session cap. Default 50. */
@@ -190,6 +195,7 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
   const path = opts.path ?? "/mcp";
   const allowAccount = opts.allowAccount ?? false;
   const allowTokenFile = allowAccount && (opts.allowTokenFile ?? false);
+  const allowWebSession = opts.allowWebSession ?? false;
   if (opts.allowTokenFile && !allowAccount) {
     log.warn("http: ALZA_HTTP_ALLOW_TOKEN_FILE ignored — it requires ALZA_HTTP_ENABLE_ACCOUNT=1");
   }
@@ -210,7 +216,10 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
   // Account mode: per-session instances, so cookie jars are never shared.
   const shared = allowAccount
     ? undefined
-    : { browser: new AlzaBrowser({ baseUrl: opts.baseUrl, cdpUrl: opts.cdpUrl }), cfTransport: new ImpersonateTransport() };
+    : {
+        browser: new AlzaBrowser({ baseUrl: opts.baseUrl, cdpUrl: opts.cdpUrl, ...(allowWebSession ? {} : { webSessionFile: null }) }),
+        cfTransport: new ImpersonateTransport(),
+      };
   const instructionsNote = allowAccount
     ? "Served over Streamable HTTP: this MCP session has its own isolated OAuth login and confirmation tokens" +
       (allowTokenFile ? " (pre-loaded from the operator's ALZA_TOKEN_FILE)." : "; sign in with `auth_start` → `auth_exchange`.")
@@ -307,6 +316,7 @@ export async function startHttpServer(opts: HttpServerOptions = {}): Promise<Run
       cfTransport: shared?.cfTransport,
       lockedToolsets: locked,
       loadTokenFile: allowTokenFile,
+      loadWebSession: allowWebSession,
       instructionsNote,
       transport: "http",
     });
@@ -426,6 +436,7 @@ export function parseCliConfig(argv: string[], env: NodeJS.ProcessEnv = process.
       host,
       allowAccount: TRUTHY.has((env.ALZA_HTTP_ENABLE_ACCOUNT ?? "").toLowerCase()),
       allowTokenFile: TRUTHY.has((env.ALZA_HTTP_ALLOW_TOKEN_FILE ?? "").toLowerCase()),
+      allowWebSession: TRUTHY.has((env.ALZA_HTTP_ALLOW_WEB_SESSION ?? "").toLowerCase()),
       allowedHosts,
       maxSessions: Number.isInteger(max) && max > 0 ? max : undefined,
       sessionIdleMs: Number.isFinite(idle) && idle > 0 ? idle : undefined,

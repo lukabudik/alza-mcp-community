@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `--login` and `ALZA_WEB_SESSION_FILE`: the catalog tools can browse signed in and return the prices Alza shows your account (company price lists, for example) instead of public prices. `--login` opens your installed Chrome or Edge, you sign in by hand, and the cookies are saved to `~/.alza-mcp/web-session.json` (mode 0600). Every catalog browser context starts from that file, and cookies Alza refreshes are written back on close unless a newer `--login` replaced the file. Opt-in: without the file nothing changes; `ALZA_WEB_SESSION_FILE=none` ignores it. Over HTTP it is loaded only with `ALZA_HTTP_ALLOW_WEB_SESSION=1`. When the sign-in expires, the server detects that Alza served a page signed out (`pv_user_details.user_login_state` in the page's data layer), logs a warning and appends a note to the results of the price tools (`search_products`, `get_product`, `compare_products`, `get_deals`, `recommend_alternatives`, `pc_build_*`) saying the prices are public and `--login` should be run again. Live-verified on alza.cz on 2026-11-02 with an account that has its own price list: signed-in searches and `get_product` returned that account's prices, lower than public for part of the products, and a session with its sign-in cookie removed was flagged as expired and got the note.
+
 ### Fixed
+- The README said `ALZA_CDP_URL` reuses your Chrome's session and Alza cookies. It does not: pages open in a fresh browser context. The README now says so and points to `--login`.
 - `--setup-cf` on Windows: when pip or the `curl_cffi` import check fails and the venv path is longer than 150 characters, it now says the path likely exceeds Windows' 260-character limit and how to fix it (enable `LongPathsEnabled`, or install in a shorter folder and set `ALZA_CF_PYTHON`), instead of only blaming `curl_cffi` (#119).
 - The test suite runs on Windows: `browser-install` imports a `file://` URL instead of a bare `C:\` path, the setup-cf real run looks for `Scripts\python.exe`, the token-file mode check is POSIX-only like the one before it, and the two tests that need a POSIX shell are skipped there with the reason stated (#120).
 

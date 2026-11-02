@@ -1,15 +1,16 @@
 import { spawn } from "node:child_process";
 import { proxyFromEnv } from "./proxy.js";
 import { createRequire } from "node:module";
-import { chromium, type Browser, type BrowserContext, type Page, type Response } from "playwright";
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page, type Response } from "playwright";
 import { CloudflareChallengeError, UpstreamError } from "./errors.js";
 import { cultureOf, resolveLocale, type Locale } from "./locale.js";
 import { log } from "./logger.js";
+import { loadWebSession, webSessionFile, writeBackWebSession, type WebSessionState } from "./web-session.js";
 
 const require = createRequire(import.meta.url);
 
 const PAGE_TIMEOUT_MS = 30_000;
-const HEADER_USER_AGENT =
+export const HEADER_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 const DEFAULT_IDLE_BROWSER_TTL_MS = 3 * 60 * 1000;
@@ -66,6 +67,8 @@ export interface BrowserOptions {
   headless?: boolean;
   /** Close the browser entirely after this many ms of inactivity. Default 3 min. */
   idleTtlMs?: number;
+  /** Signed-in web session (see web-session.ts). Default ALZA_WEB_SESSION_FILE; null disables. */
+  webSessionFile?: string | null;
 }
 
 /**
@@ -89,6 +92,10 @@ export class AlzaBrowser {
   private readonly cdpUrl?: string;
   private readonly headless: boolean;
   private readonly idleTtlMs: number;
+  private readonly webSessionFile?: string;
+  /** mtime of the session file the current context was created from; undefined for an anonymous context. */
+  private webSessionMtimeMs?: number;
+  private expired = false;
 
   private launching?: Promise<Browser>;
   private browser?: Browser;
@@ -108,6 +115,20 @@ export class AlzaBrowser {
     const envTtl = Number(process.env.ALZA_IDLE_TTL_MS);
     this.idleTtlMs =
       opts.idleTtlMs ?? (Number.isFinite(envTtl) && envTtl > 0 ? envTtl : DEFAULT_IDLE_BROWSER_TTL_MS);
+    this.webSessionFile = opts.webSessionFile === null ? undefined : (opts.webSessionFile ?? webSessionFile());
+  }
+
+  /** True when the current context was created from the `--login` session file. */
+  get webSessionLoaded(): boolean {
+    return this.webSessionMtimeMs !== undefined;
+  }
+
+  /**
+   * True when a session was loaded but Alza served a page as signed out (the
+   * sign-in expired or was revoked): catalog prices are then public prices.
+   */
+  get webSessionExpired(): boolean {
+    return this.expired;
   }
 
   /**
@@ -135,6 +156,7 @@ export class AlzaBrowser {
       page.setDefaultNavigationTimeout(PAGE_TIMEOUT_MS);
       return await fn(page);
     } finally {
+      if (page && this.webSessionLoaded) await this.checkSignIn(page);
       if (page) await page.close().catch(() => {});
       this.inFlight--;
       if (this.inFlight === 0) this.scheduleIdleShutdown();
@@ -155,6 +177,7 @@ export class AlzaBrowser {
     this.contextGeneration++;
     this.browser = undefined;
 
+    await this.saveWebSession(ctx);
     await ctx?.close().catch(() => {});
 
     if (this.cdpUrl) {
@@ -181,6 +204,41 @@ export class AlzaBrowser {
     }
   }
 
+  /**
+   * Alza's analytics data layer carries `pv_user_details.user_login_state`
+   * ("logged_in" / "logged_out", live 2026-11-02), whatever the storefront
+   * language. A page without it (not pushed yet, or not an Alza page) proves nothing.
+   */
+  private async checkSignIn(page: Page): Promise<void> {
+    let state: unknown;
+    try {
+      state = await page.evaluate(
+        "(window.dataLayer || []).map(function (e) { return e && e.pv_user_details && e.pv_user_details.user_login_state; }).filter(Boolean).pop() || null"
+      );
+    } catch {
+      return;
+    }
+    if (state !== "logged_in" && state !== "logged_out") return;
+    const expired = state === "logged_out";
+    if (expired && !this.expired) {
+      log.warn("web-session: Alza served the page signed out; the --login session has expired, prices are public", { file: this.webSessionFile });
+    }
+    this.expired = expired;
+  }
+
+  /** Persist cookies Alza refreshed during this context's life, so the sign-in does not age out. */
+  private async saveWebSession(ctx: BrowserContext | undefined): Promise<void> {
+    const mtimeMs = this.webSessionMtimeMs;
+    this.webSessionMtimeMs = undefined;
+    if (!ctx || !this.webSessionFile || mtimeMs === undefined) return;
+    try {
+      const state = (await ctx.storageState()) as WebSessionState;
+      writeBackWebSession(this.webSessionFile, mtimeMs, state);
+    } catch (err) {
+      log.warn("web-session: could not save refreshed cookies", { error: (err as Error)?.message });
+    }
+  }
+
   /** Forget the current browser/context without closing anything (they are already gone). */
   private async dropBrowser(): Promise<void> {
     const ctx = this.context;
@@ -188,6 +246,7 @@ export class AlzaBrowser {
     this.contextPromise = undefined;
     this.contextGeneration++;
     this.browser = undefined;
+    this.webSessionMtimeMs = undefined;
     await ctx?.close().catch(() => {});
   }
 
@@ -205,11 +264,11 @@ export class AlzaBrowser {
   private async createContext(): Promise<BrowserContext> {
     const generation = this.contextGeneration;
     const browser = await this.ensureBrowser();
+    // Read on every context creation, so a `--login` takes effect after the next idle shutdown.
+    const session = loadWebSession(this.webSessionFile);
     const context = await browser.newContext({
-      locale: cultureOf(this.locale.acceptLanguage),
-      userAgent: HEADER_USER_AGENT,
-      viewport: { width: 1366, height: 900 },
-      extraHTTPHeaders: { "accept-language": this.locale.acceptLanguage },
+      ...browserContextOptions(this.locale),
+      ...(session ? { storageState: session.state as BrowserContextOptions["storageState"] } : {}),
     });
 
     await context.route("**/*", (route) => {
@@ -237,6 +296,9 @@ export class AlzaBrowser {
       throw new Error("browser context has been closed while it was being created");
     }
     this.context = context;
+    this.webSessionMtimeMs = session?.mtimeMs;
+    this.expired = false;
+    if (session) log.info("alza-browser: catalog pages load signed in", { file: this.webSessionFile });
     return context;
   }
 
@@ -273,6 +335,7 @@ export class AlzaBrowser {
       this.context = undefined;
       this.contextPromise = undefined;
       this.contextGeneration++;
+      this.webSessionMtimeMs = undefined;
     });
   }
 
@@ -308,6 +371,16 @@ export class AlzaBrowser {
       return chromium.launch(launchArgs);
     }
   }
+}
+
+/** Context options shared by the catalog browser and `--login`, so the saved session matches the browser that reuses it. */
+export function browserContextOptions(locale: Locale) {
+  return {
+    locale: cultureOf(locale.acceptLanguage),
+    userAgent: HEADER_USER_AGENT,
+    viewport: { width: 1366, height: 900 },
+    extraHTTPHeaders: { "accept-language": locale.acceptLanguage },
+  };
 }
 
 /**

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { parseCliConfig, startHttpServer } from "./http.js";
-import { informationalOutput, isSetupCf, replyForTransportError } from "./cli.js";
+import { informationalOutput, isSetupCf, isWebLogin, replyForTransportError } from "./cli.js";
 import { ConfigurationError } from "./infra/errors.js";
 import { resolveLocale } from "./infra/locale.js";
 import { InitializeGuardTransport } from "./infra/initialize-guard.js";
@@ -19,6 +19,10 @@ async function main(): Promise<void> {
     const { runSetupCf } = await import("./infra/setup-cf.js");
     process.exitCode = await runSetupCf();
     return;
+  }
+  if (isWebLogin(process.argv.slice(2))) {
+    const { runWebLogin } = await import("./infra/web-login.js");
+    process.exit(await runWebLogin());
   }
   const config = parseCliConfig(process.argv.slice(2));
   // Fail fast on a bad ALZA_PROXY_URL instead of starting and silently
