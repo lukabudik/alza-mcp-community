@@ -100,6 +100,10 @@ describe("parseCliConfig", () => {
     expect(parseCliConfig(["--http"], { ALZA_HTTP_ENABLE_ACCOUNT: "1", ALZA_HTTP_ALLOW_TOKEN_FILE: "true" }).http)
       .toMatchObject({ allowAccount: true, allowTokenFile: true });
   });
+  it("keeps the signed-in web session off unless explicitly opted in", () => {
+    expect(parseCliConfig(["--http"], {}).http).toMatchObject({ allowWebSession: false });
+    expect(parseCliConfig(["--http"], { ALZA_HTTP_ALLOW_WEB_SESSION: "1" }).http).toMatchObject({ allowWebSession: true });
+  });
   it("rejects bad input", () => {
     expect(() => parseCliConfig(["--port", "80"], {})).toThrow(/--http/);
     expect(() => parseCliConfig(["--http", "--port", "abc"], {})).toThrow(/Invalid port/);

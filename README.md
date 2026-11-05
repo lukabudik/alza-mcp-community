@@ -230,7 +230,8 @@ All optional — `alza-mcp-community` works out of the box.
 | Env var | Default | Purpose |
 |---|---|---|
 | `ALZA_BASE_URL` | `https://www.alza.cz` | Switch locale: `https://www.alza.cz`, `.sk`, `.hu`, `.at`, `.de`, `.co.uk` |
-| `ALZA_CDP_URL` | _unset_ | Connect to your already-running Chrome via CDP instead of launching a managed Chromium. Reuses the existing browser session; set `ALZA_MCP_SKIP_INSTALL=1` separately to skip the installation-time download. Launch Chrome with `--remote-debugging-port=9222` and set `ALZA_CDP_URL=http://localhost:9222`. |
+| `ALZA_CDP_URL` | _unset_ | Connect to your already-running Chrome via CDP instead of launching a managed Chromium. Pages open in a fresh browser context, so your Chrome's Alza cookies are not used (see [Your own prices](#your-own-prices-signed-in-catalog) for that); set `ALZA_MCP_SKIP_INSTALL=1` separately to skip the installation-time download. Launch Chrome with `--remote-debugging-port=9222` and set `ALZA_CDP_URL=http://localhost:9222`. |
+| `ALZA_WEB_SESSION_FILE` | `~/.alza-mcp/web-session.json` | Signed-in web session written by `--login` and used by the catalog tools when the file exists. Set `none` to ignore it. See [Your own prices](#your-own-prices-signed-in-catalog). |
 | `ALZA_TOOLSETS` | _unset_ | Toolsets to enable at startup in addition to the default `catalog` + `auth`, comma-separated (`basket_and_checkout,orders_and_payments`) or `all`. For MCP clients that do not reload the tool list after `set_toolset` (they ignore `notifications/tools/list_changed`), so the basket, order and account tools are visible from the first `tools/list`. Ids: see `list_toolsets`; an unknown id stops the server at startup. |
 | `ALZA_TOOLS_ALLOW` | _unset_ | Tool names this deployment exposes, comma-separated (`search_products,get_product,cart`). Every other tool — `list_toolsets`, `set_toolset` and `report_issue` included — is removed, so no call can bring it back; the allowed tools are enabled from the start. For handing the server to an agent you do not fully trust (e.g. a remote connector). An unknown name stops the server at startup. |
 | `ALZA_MUTATION_ACTIONS_ALLOW` | _unset_ | `prepare_mutation` actions that may be issued a confirmation token, comma-separated (`coupon_add,watchdog_set`). Every guarded write needs that token, so other actions cannot run; the `action` enums of `prepare_mutation` and `mutate_list` shrink to the list. An unknown action stops the server at startup. |
@@ -242,6 +243,18 @@ All optional — `alza-mcp-community` works out of the box.
 | `ALZA_LOG_LEVEL` | `info` | Minimum stderr log level: `debug`, `info`, `warn` or `error` |
 | `ALZA_CF_TRANSPORT` | _enabled_ | Set `0` to disable the Chrome-fingerprint `curl_cffi` sidecar (the account stack then uses plain fetch and the browser) |
 | `ALZA_CF_PYTHON` | _auto_ | Python interpreter that has `curl_cffi`. Default search order: this variable, `.venv-cf` in the package (`bin/python`, or `Scripts\python.exe` on Windows), then `python3` (`python`/`py` on Windows) |
+
+### Your own prices (signed-in catalog)
+
+By default the catalog tools browse alza.cz anonymously and return public prices. If your Alza account gets different prices (a company price list, for example), sign in once:
+
+```bash
+npx -y alza-mcp-community --login
+```
+
+This opens your installed Chrome (or Edge) on the storefront. Sign in there yourself, then press Enter in the terminal or close the window. The cookies are saved to `ALZA_WEB_SESSION_FILE` (`~/.alza-mcp/web-session.json`, mode 0600), and from the next browser start every catalog page loads signed in, so `search_products`, `get_product`, `compare_products`, `get_deals` and `pc_build_*` return the prices Alza shows your account. `recommend_alternatives` signs in for the source product, but its candidate list comes from the mobile API and keeps public prices. The password never passes through the server.
+
+It is opt-in: nothing changes until you run `--login`. To go back to public prices, delete the file or set `ALZA_WEB_SESSION_FILE=none`. Cookies Alza refreshes while the server runs are written back when the browser closes, unless a newer `--login` replaced the file meanwhile. When the sign-in expires, Alza serves the pages signed out; the server notices (Alza's page data reports `logged_out`), logs a warning, and adds a note to every price result telling the agent the prices are public and that you should run `--login` again. This session is separate from the mobile-API OAuth login (`auth_start` → `auth_exchange`, `ALZA_TOKEN_FILE`), which the account, cart and order tools use. Over HTTP it is not loaded unless you set `ALZA_HTTP_ALLOW_WEB_SESSION=1`.
 
 ### Install paths and the curl_cffi venv
 
@@ -274,7 +287,7 @@ On HTTP the server is stricter than on stdio, because a network endpoint can be 
 
 - **Catalog only by default.** Only the read-only, anonymous toolsets are usable: `catalog` (on) and `pc_builder` (enable with `set_toolset`). Every other toolset (`auth`, basket/checkout, account, orders/payments, reviews/subscriptions, chat, `advanced_raw`) is **locked**: `list_toolsets` shows it with the reason, and `set_toolset` refuses to enable it. These tools sign in to and act on a real Alza account (orders, payments, credentials), so a shared endpoint must not offer them by accident. Set `ALZA_HTTP_ENABLE_ACCOUNT=1` to unlock them.
 - **One server per MCP session.** Each `Mcp-Session-Id` gets its own server instance: its own toolset state, OAuth tokens and one-time confirmation tokens. With `ALZA_HTTP_ENABLE_ACCOUNT=1`, each session also gets its own browser context and Chrome-fingerprint sidecar, because both keep Alza cookies. Sessions expire after 30 idle minutes.
-- **No token file.** `ALZA_TOKEN_FILE` (`~/.alza-mcp/tokens.json`) holds one person's login, so HTTP mode does not load it. Each session signs in with `auth_start` → `auth_exchange`. For a single-user localhost setup you can set `ALZA_HTTP_ALLOW_TOKEN_FILE=1` (together with `ALZA_HTTP_ENABLE_ACCOUNT=1`); every session then starts signed in as that account, so never do this on a shared host. All sessions start from the same refresh token. Alza may rotate it on refresh (reported on 2026-09-10; a 2026-10-07 run saw the same refresh token come back six times, so treat rotation as possible, not guaranteed), in which case the first session that refreshes invalidates the copy the others hold (they then need `auth_start` → `auth_exchange`). Each session writes its refreshed tokens back to the token file, so a restart picks up the newest ones; keep to one active session in this mode.
+- **No token file.** `ALZA_TOKEN_FILE` (`~/.alza-mcp/tokens.json`) holds one person's login, so HTTP mode does not load it. Each session signs in with `auth_start` → `auth_exchange`. For a single-user localhost setup you can set `ALZA_HTTP_ALLOW_TOKEN_FILE=1` (together with `ALZA_HTTP_ENABLE_ACCOUNT=1`); every session then starts signed in as that account, so never do this on a shared host. All sessions start from the same refresh token. Alza may rotate it on refresh (reported on 2026-09-10; a 2026-10-07 run saw the same refresh token come back six times, so treat rotation as possible, not guaranteed), in which case the first session that refreshes invalidates the copy the others hold (they then need `auth_start` → `auth_exchange`). Each session writes its refreshed tokens back to the token file, so a restart picks up the newest ones; keep to one active session in this mode. The same goes for the signed-in web session from `--login`: it is not loaded over HTTP unless you set `ALZA_HTTP_ALLOW_WEB_SESSION=1`, and then every session's catalog reads show that account's prices.
 - **Localhost only by default.** It binds `127.0.0.1` and rejects requests whose `Host` or `Origin` is not a loopback name (DNS-rebinding protection). There is no built-in authentication or TLS. If you bind elsewhere (`--host 0.0.0.0`), put it behind a reverse proxy that does both, and set `ALZA_HTTP_ALLOWED_HOSTS`.
 
 | Env var / flag | Default | Purpose |
@@ -286,6 +299,7 @@ On HTTP the server is stricter than on stdio, because a network endpoint can be 
 | `ALZA_HTTP_ALLOWED_HOSTS` | loopback names when bound to loopback, otherwise no check | Comma-separated hostnames accepted in `Host`/`Origin` |
 | `ALZA_HTTP_ENABLE_ACCOUNT` | off | Unlock the auth/account/checkout/order/payment toolsets (per-session logins) |
 | `ALZA_HTTP_ALLOW_TOKEN_FILE` | off | Also load `ALZA_TOKEN_FILE` into every session (single-user only; needs `ALZA_HTTP_ENABLE_ACCOUNT`) |
+| `ALZA_HTTP_ALLOW_WEB_SESSION` | off | Load the `--login` web session (`ALZA_WEB_SESSION_FILE`) into the catalog browser (single-user only) |
 | `ALZA_HTTP_MAX_SESSIONS` | `50` | Concurrent session cap (HTTP 503 beyond it) |
 | `ALZA_HTTP_SESSION_IDLE_MS` | `1800000` | Close a session after this long without a request (a session holding an open GET/SSE stream is not closed) |
 | `ALZA_HTTP_REQUEST_TIMEOUT_MS` | `30000` | Time a client has to send a whole request (headers get half); HTTP 408 beyond it. Responses, including tool calls and GET/SSE streams, are not limited |
@@ -437,7 +451,7 @@ Yes. Set `ALZA_CDP_URL` to your existing Chrome's debug port:
 ALZA_MCP_SKIP_INSTALL=1 ALZA_CDP_URL=http://localhost:9222 npx alza-mcp-community
 ```
 
-The MCP will use *your* Chrome — no separate download, faster cold starts, and it inherits any Alza cookies you already have.
+The MCP will use *your* Chrome — no separate download and faster cold starts. It opens its pages in a fresh browser context, so it does not use your Chrome's Alza cookies; for a signed-in catalog use `--login` (see [Your own prices](#your-own-prices-signed-in-catalog)).
 
 ### Will Alza take this down?
 

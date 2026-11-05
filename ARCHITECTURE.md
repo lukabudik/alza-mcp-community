@@ -28,12 +28,14 @@ So there are two transports, chosen per surface:
 
 ```
 src/
-  index.ts               entrypoint: stdio (default) or --http, --setup-cf, signal handling
+  index.ts               entrypoint: stdio (default) or --http, --setup-cf, --login, signal handling
   cli.ts                 command-line flags and usage text
   http.ts                Streamable HTTP transport — one McpServer per session, account toolsets locked unless opted in
   server.ts              buildServer() — wires deps, registers tools/resources/prompts, wraps errors
   infra/
-    browser.ts           Playwright facade — lazy launch, page pool, idle shutdown, CDP attach
+    browser.ts           Playwright facade — lazy launch, page pool, idle shutdown, CDP attach, signed-in web session
+    web-session.ts       ALZA_WEB_SESSION_FILE: load, atomic save and guarded write-back of the --login cookies
+    web-login.ts         --login: headed Chrome/Edge, the user signs in by hand, cookies saved
     impersonate-transport.ts  Node client for the curl_cffi Chrome-fingerprint sidecar
     mobile-api.ts        APK-derived REST client: OAuth PKCE, token refresh, transport fallback chain
     app-action.ts        AppActionExecutor — runs server-provided hypermedia actions under route policies

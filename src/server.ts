@@ -54,6 +54,8 @@ export interface BuildOptions {
   allowedMutationActions?: readonly string[];
   /** Auto-load ALZA_TOKEN_FILE (default true; see MobileApiOptions.loadTokenFile). */
   loadTokenFile?: boolean;
+  /** Load the signed-in web session (ALZA_WEB_SESSION_FILE) into the catalog browser. Default true; ignored when `browser` is passed. */
+  loadWebSession?: boolean;
   /** Extra sentence appended to the server instructions (e.g. the HTTP-mode note). */
   instructionsNote?: string;
   /** Reported in `report_issue` drafts (default "stdio"). */
@@ -67,7 +69,9 @@ export interface BuildResult {
 }
 
 export function buildServer(opts: BuildOptions = {}): BuildResult {
-  const browser = opts.browser ?? new AlzaBrowser({ baseUrl: opts.baseUrl, cdpUrl: opts.cdpUrl });
+  const browser =
+    opts.browser ??
+    new AlzaBrowser({ baseUrl: opts.baseUrl, cdpUrl: opts.cdpUrl, ...(opts.loadWebSession === false ? { webSessionFile: null } : {}) });
   const catalog = new Catalog(browser);
   // Chrome-fingerprint sidecar (curl_cffi) — tried FIRST for the account stack:
   // it bypasses the Cloudflare bot wall without a browser (verified 2026-09-15).
@@ -123,7 +127,7 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
   const recentErrors = new RecentErrors();
   const errorWrap = async (name: string, fn: () => Promise<ToolResult>): Promise<ToolResult> => {
     try {
-      return await fn();
+      return withSignedOutNote(name, await fn(), browser.webSessionExpired);
     } catch (err) {
       const message = friendlyError(err);
       log.warn(`tool ${name} error`, { error: message });
@@ -197,6 +201,18 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
 
 const REPORT_HINT =
   "If this looks like a bug in alza-mcp-community or a change on Alza's side rather than a problem with the request, you can call `report_issue` to draft a GitHub issue — ask the user before filing it.";
+
+export const SIGNED_OUT_NOTE =
+  "Note: the saved alza.cz sign-in (`--login`) has expired, so the prices above are public prices, not this account's own. Tell the user, and ask them to run `alza-mcp-community --login` again to restore their prices.";
+
+/** Tools whose prices come from catalog pages, so a signed-in web session changes them (cached answers included). */
+const WEB_PRICED_TOOLS = new Set(["search_products", "get_product", "compare_products", "get_deals", "recommend_alternatives", "pc_build_check", "pc_build_suggest"]);
+
+/** Append SIGNED_OUT_NOTE to a price-bearing result while the `--login` session is expired. */
+export function withSignedOutNote(tool: string, res: ToolResult, sessionExpired: boolean): ToolResult {
+  if (!sessionExpired || res.isError || !WEB_PRICED_TOOLS.has(tool)) return res;
+  return { ...res, content: [...res.content, { type: "text", text: SIGNED_OUT_NOTE }] };
+}
 
 /** Errors caused by the request itself: no point asking the maintainers about them. */
 function isUserError(err: unknown): boolean {

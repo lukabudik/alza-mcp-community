@@ -45,7 +45,7 @@ Suites that do not apply to the tree (no badges, no `mcpb/`, no `--http`) report
 
 ```
 src/
-  index.ts          # entrypoint: stdio (default), --http, --setup-cf
+  index.ts          # entrypoint: stdio (default), --http, --setup-cf, --login
   http.ts           # Streamable HTTP transport (per-session servers)
   server.ts         # builds the McpServer; testable
   infra/            # browser, mobile-API client, curl_cffi sidecar client, AppAction executor,
