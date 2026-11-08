@@ -519,7 +519,7 @@ export class MobileAccount {
    * navigation's `archiveOrders` section (`GET .../v1/orders/archive`).
    * Read-only (no token). `hide_cancelled_orders` mirrors the app's
    * "Skrýt zrušené" toggle; the APK form default is `false` (include cancelled). */
-  async orderArchive(opts: { user_id?: string; hide_cancelled_orders?: boolean; limit?: number } = {}): Promise<unknown> {
+  async orderArchive(opts: { user_id?: string; hide_cancelled_orders?: boolean; limit?: number; offset?: number } = {}): Promise<unknown> {
     const uid = this.userIdFor(opts.user_id ?? this.api.userId);
     const hide = opts.hide_cancelled_orders ?? false;
     if (typeof hide !== "boolean") throw new UserError("hide_cancelled_orders must be a boolean");
@@ -528,7 +528,12 @@ export class MobileAccount {
       limit = opts.limit;
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new UserError("limit must be an integer between 1 and 100");
     }
-    return this.api.orderArchive(uid, hide, limit);
+    let offset: number | undefined;
+    if (opts.offset !== undefined) {
+      offset = opts.offset;
+      if (!Number.isInteger(offset) || offset < 0) throw new UserError("offset must be a non-negative integer");
+    }
+    return this.api.orderArchive(uid, hide, limit, offset);
   }
 
   /** AT3 (2026-09-24): vision/barcode product lookup — typed read over the APK's

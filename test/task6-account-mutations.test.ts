@@ -152,6 +152,7 @@ describe("task-6 account credential/identity mutations (A14–A18)", () => {
     await expect(account.orderArchive({ user_id: UID, hide_cancelled_orders: "yes" as unknown as boolean })).rejects.toThrow(/hide_cancelled_orders/);
     await expect(account.orderArchive({ user_id: UID, limit: 0 })).rejects.toThrow(/limit/);
     await expect(account.orderArchive({ user_id: UID, limit: 101 })).rejects.toThrow(/limit/);
+    await expect(account.orderArchive({ user_id: UID, offset: -1 })).rejects.toThrow(/offset/);
 
     const seen: Seen[] = [];
     vi.stubGlobal("fetch", withFetch((req) => {
@@ -174,10 +175,11 @@ describe("task-6 account credential/identity mutations (A14–A18)", () => {
       if (req.url.endsWith("/v2/getUserData")) return json({ user_id: Number(UID) }); // #79 identity check
       expect(req.url).toContain("hideCancelledOrders=true");
       expect(req.url).toContain("limit=25");
+      expect(req.url).toContain("offset=100");
       return json({ value: [{ orderId: "1" }] });
     }, []));
     try {
-      await account.orderArchive({ user_id: UID, hide_cancelled_orders: true, limit: 25 });
+      await account.orderArchive({ user_id: UID, hide_cancelled_orders: true, limit: 25, offset: 100 });
     } finally {
       vi.unstubAllGlobals();
     }

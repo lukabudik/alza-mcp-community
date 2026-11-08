@@ -589,11 +589,12 @@ export function createAdvancedTools(deps: ToolDeps): RegisterableTool[] {
             user_id: z.string().regex(/^\d{1,16}$/).describe("Numeric Alza user id (the `user_id` field of the `profile`/`user_data` response)."),
             hide_cancelled_orders: z.boolean().optional().describe("The app's 'Skrýt zrušené' (hide cancelled orders) toggle. Default false — cancelled orders are included."),
             limit: z.number().int().min(1).max(100).optional().describe("Page size (server default 10). Use `paging.next` for the next page."),
+            offset: z.number().int().min(0).optional().describe("Number of orders to skip (the `offset` of `paging.next`). Default 0."),
           },
           annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: true },
           outputSchema: OUTPUT_SCHEMAS["order_archive"],
         },
-        async (args) => wrap("order_archive", async () => result(await apiAccount(deps).orderArchive({ user_id: args.user_id, hide_cancelled_orders: args.hide_cancelled_orders, limit: args.limit }))),
+        async (args) => wrap("order_archive", async () => result(await apiAccount(deps).orderArchive({ user_id: args.user_id, hide_cancelled_orders: args.hide_cancelled_orders, limit: args.limit, offset: args.offset }))),
       );
     },
   };
