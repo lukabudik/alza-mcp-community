@@ -922,9 +922,10 @@ export class MobileApi {
    * Live-verified 2026-09-24 on disposable account 100000002: 200 with empty
    * `value[]` + `paging` for both `hideCancelledOrders` variants
    * (`docs/live-evidence/task6b-remaining-candidates-2026-09-24.json`). */
-  async orderArchive(userId: string, hideCancelledOrders = false, limit?: number): Promise<unknown> {
+  async orderArchive(userId: string, hideCancelledOrders = false, limit?: number, offset?: number): Promise<unknown> {
     const q = new URLSearchParams({ hideCancelledOrders: hideCancelledOrders ? "true" : "false", productFilterType: "0" });
     if (limit !== undefined) q.set("limit", String(limit));
+    if (offset !== undefined) q.set("offset", String(offset));
     return this.request(`/api/users/${encodeURIComponent(userId)}/v1/orders/archive?${q.toString()}`);
   }
 
