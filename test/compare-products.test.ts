@@ -50,9 +50,21 @@ describe("buildComparisonTable (pure alignment)", () => {
     expect(t.rows.find((r) => r.name === "Obnovovací frekvence")!.values).toEqual(["165 Hz", null]);
     expect(t.rows.find((r) => r.name === "Typ panelu")!.values).toEqual([null, "IPS | matný"]);
     expect(t.products).toEqual([
-      { code: "AAA1", ok: true, name: "Product AAA1", url: "https://www.alza.cz/AAA1" },
-      { code: "BBB2", ok: true, name: "Product BBB2", url: "https://www.alza.cz/BBB2" },
+      { code: "AAA1", ok: true, name: "Product AAA1", url: "https://www.alza.cz/AAA1", currency: "CZK", price: 9990, originalPrice: 10990 },
+      { code: "BBB2", ok: true, name: "Product BBB2", url: "https://www.alza.cz/BBB2", currency: "CZK", price: 8990 },
     ]);
+  });
+
+  it("shows a signed-in account's price next to the public price, in the Price row and as numbers", () => {
+    const own = product("OWN1", { price: 800, originalPrice: 1000, publicPrice: 1000 });
+    const promo = product("OWN2", { price: 800, publicPrice: 1000, priceNow: 720, promoCode: "ALZADNY10" });
+    const t = buildComparisonTable([
+      { code: "OWN1", product: own },
+      { code: "OWN2", product: promo },
+    ]);
+    expect(t.rows[0]!.values).toEqual(["800 CZK (public 1\u00a0000 CZK)", "**720 CZK** with code ALZADNY10 (shelf 800 CZK, public 1\u00a0000 CZK)"]);
+    expect(t.products[0]).toMatchObject({ price: 800, originalPrice: 1000, publicPrice: 1000 });
+    expect(t.products[1]).toMatchObject({ price: 800, publicPrice: 1000, priceNow: 720, promoCode: "ALZADNY10" });
   });
 
   it("keeps a failed product as its own column with null cells", () => {

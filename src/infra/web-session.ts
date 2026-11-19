@@ -74,3 +74,25 @@ export function writeBackWebSession(path: string, loadedMtimeMs: number, state: 
   saveWebSession(path, state);
   return true;
 }
+
+/** The session file's mtime, or undefined when there is no file. */
+export function webSessionMtime(path: string | undefined): number | undefined {
+  if (!path) return undefined;
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The command that signs in again, matching how this server was started: a
+ * local checkout (`node …/dist/index.js`) gets that path, anything installed
+ * through npm or npx the published package name.
+ */
+export function loginCommand(script: string | undefined = process.argv[1]): string {
+  if (script && /[\\/]dist[\\/]index\.js$/.test(script) && !/[\\/](node_modules|_npx)[\\/]/.test(script)) {
+    return `node ${/\s/.test(script) ? `"${script}"` : script} --login`;
+  }
+  return "npx -y alza-mcp-community --login";
+}

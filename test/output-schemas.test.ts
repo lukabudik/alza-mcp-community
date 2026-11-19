@@ -1,4 +1,5 @@
 import { Catalog } from "../src/domain/catalog.js";
+import { AlzaBrowser } from "../src/infra/browser.js";
 import { describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -75,8 +76,46 @@ describe("per-tool outputSchema (N-1)", () => {
       const sc = call.structuredContent as Record<string, unknown>;
       expect(sc.authenticated).toBe(false);
       expect(typeof sc.apiBaseUrl).toBe("string");
+      // ALZA_WEB_SESSION_FILE=none in tests: no web session, no page load.
+      expect(sc.webSession).toEqual({ state: "disabled", priceScope: "public" });
       expect((call.content as { type: string; text: string }[])[0].type).toBe("text");
     } finally {
+      await client.close();
+      await built.close();
+    }
+  });
+
+  it("reports an expired web sign-in in account_status, with the command that renews it", async () => {
+    const status = vi.spyOn(AlzaBrowser.prototype, "webSessionStatus").mockResolvedValue({ state: "signed_out", savedAt: "2026-11-18T07:00:00.000Z", checkedAt: "2026-11-18T09:00:00.000Z" });
+    const { client, built } = await clientAndServer();
+    try {
+      const call = await client.callTool({ name: "account_status", arguments: {} });
+      expect(call.isError).toBeFalsy();
+      const ws = (call.structuredContent as { webSession: Record<string, unknown> }).webSession;
+      expect(ws).toMatchObject({ state: "signed_out", priceScope: "public", savedAt: "2026-11-18T07:00:00.000Z" });
+      expect(ws.loginCommand).toMatch(/--login$/);
+      expect(status).toHaveBeenCalledWith({ check: true });
+    } finally {
+      status.mockRestore();
+      await client.close();
+      await built.close();
+    }
+  });
+
+  it("marks catalog prices public, through SDK output validation, once the web sign-in expired", async () => {
+    const state = vi.spyOn(AlzaBrowser.prototype, "signInState", "get").mockReturnValue("signed_out");
+    const product = vi.spyOn(Catalog.prototype, "getProduct").mockResolvedValue({ code: "TEST0001", id: 1, name: "Example", url: "https://www.alza.cz/x-d1.htm", price: 1000, currency: "CZK" });
+    const { client, built } = await clientAndServer();
+    try {
+      const call = await client.callTool({ name: "get_product", arguments: { code: "TEST0001" } });
+      expect(call.isError).toBeFalsy();
+      expect(call.structuredContent).toMatchObject({ signedIn: false, priceScope: "public", product: { price: 1000 } });
+      expect((call.structuredContent as { loginCommand: string }).loginCommand).toMatch(/--login$/);
+      const texts = (call.content as { type: string; text: string }[]).map((c) => c.text);
+      expect(texts[0]).toMatch(/^WARNING: the saved alza\.cz sign-in \(--login\) has expired/);
+    } finally {
+      state.mockRestore();
+      product.mockRestore();
       await client.close();
       await built.close();
     }

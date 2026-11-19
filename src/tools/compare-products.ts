@@ -28,6 +28,24 @@ export interface ComparisonColumn {
   name?: string;
   url?: string;
   error?: string;
+  /** Numeric price fields of the product, as `get_product` returns them (the Price row is their text form). */
+  currency?: string;
+  price?: number;
+  originalPrice?: number;
+  publicPrice?: number;
+  priceNow?: number;
+  promoCode?: string;
+  alzaPlusPrice?: number;
+  condition?: Product["condition"];
+}
+
+/** Price fields copied onto a comparison column, so agents can rank on numbers rather than the Price row text. */
+const COLUMN_PRICE_FIELDS = ["currency", "price", "originalPrice", "publicPrice", "priceNow", "promoCode", "alzaPlusPrice", "condition"] as const;
+
+function priceColumns(p: Product): Partial<ComparisonColumn> {
+  const out: Record<string, unknown> = {};
+  for (const k of COLUMN_PRICE_FIELDS) if (p[k] !== undefined) out[k] = p[k];
+  return out as Partial<ComparisonColumn>;
 }
 
 export interface ComparisonRow {
@@ -47,7 +65,9 @@ function formatPrice(p: Product): string | null {
   if (p.price === undefined) return null;
   const base = formatMoney(p.price, p.currency);
   if (p.condition) return `${base} ⚠ ${conditionTag(p)}${p.priceNow !== undefined && p.promoCode ? `; ${formatMoney(p.priceNow, p.currency)} with code ${p.promoCode}` : ""}`;
-  if (p.priceNow !== undefined && p.promoCode) return `**${formatMoney(p.priceNow, p.currency)}** with code ${p.promoCode} (shelf ${base})`;
+  const pub = p.publicPrice !== undefined ? `public ${formatMoney(p.publicPrice, p.currency)}` : null;
+  if (p.priceNow !== undefined && p.promoCode) return `**${formatMoney(p.priceNow, p.currency)}** with code ${p.promoCode} (shelf ${base}${pub ? `, ${pub}` : ""})`;
+  if (pub) return `${base} (${pub})`;
   return p.originalPrice !== undefined && p.originalPrice > p.price ? `${base} (was ${formatMoney(p.originalPrice, p.currency)})` : base;
 }
 
@@ -75,7 +95,7 @@ function fixedValue(row: (typeof FIXED_ROWS)[number], p: Product): string | null
 export function buildComparisonTable(entries: CompareEntry[]): ComparisonTable {
   const products: ComparisonColumn[] = entries.map((e) =>
     e.product
-      ? { code: e.code, ok: true, name: e.product.name, url: e.product.url }
+      ? { code: e.code, ok: true, name: e.product.name, url: e.product.url, ...priceColumns(e.product) }
       : { code: e.code, ok: false, error: e.error ?? "unknown error" }
   );
 

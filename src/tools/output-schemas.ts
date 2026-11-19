@@ -86,6 +86,19 @@ export const ACCOUNT_STATUS = z
     expiresAt: z.string().optional(),
     /** True when the access token is expired (or within 60 s of it); the next account call refreshes it first. */
     expired: z.boolean().optional(),
+    /** The catalog's saved alza.cz web sign-in (`--login`), separate from the mobile API token. */
+    webSession: z
+      .object({
+        state: z.enum(["disabled", "absent", "unreadable", "unknown", "signed_in", "signed_out"]),
+        priceScope: z.enum(["account", "public", "unknown"]),
+        savedAt: z.string().optional(),
+        checkedAt: z.string().optional(),
+        checkError: z.string().optional(),
+        loginCommand: z.string().optional(),
+        note: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -247,6 +260,16 @@ export const WATCHDOG_DELETE = z
 
 /* ---------------- Catalog domain shapes ---------------- */
 
+/**
+ * Added to every catalog-priced result while a `--login` web session is in use
+ * (see `withPriceScope` in server.ts); absent for an anonymous catalog.
+ */
+const PRICE_SCOPE_FIELDS = {
+  signedIn: z.boolean().optional().describe("Whether Alza served the catalog pages signed in with the saved --login session (absent without one)."),
+  priceScope: z.enum(["account", "public"]).optional().describe("\"account\": prices are the signed-in account's own; \"public\": the saved sign-in expired, prices are public."),
+  loginCommand: z.string().optional().describe("Set when the saved sign-in expired: the command the user runs to sign in again."),
+};
+
 const PRODUCT_PARAM = z
   .object({ name: z.string(), value: z.string() })
   .passthrough();
@@ -260,6 +283,7 @@ const PRODUCT = z
     image: z.string().optional(),
     price: z.number().optional(),
     originalPrice: z.number().optional(),
+    publicPrice: z.number().optional(),
     priceNow: z.number().optional(),
     promoCode: z.string().optional(),
     promoPercent: z.number().optional(),
@@ -280,6 +304,7 @@ const PRODUCT = z
 
 export const SEARCH_PRODUCTS_OUTPUT = z
   .object({
+    ...PRICE_SCOPE_FIELDS,
     query: z.string(),
     total: z.number(),
     page: z.number(),
@@ -331,6 +356,7 @@ const DEAL = PRODUCT.extend({
 
 export const GET_DEALS_OUTPUT = z
   .object({
+    ...PRICE_SCOPE_FIELDS,
     categoryIds: z.array(z.number()),
     url: z.string().optional(),
     candidatesScanned: z.number(),
@@ -343,11 +369,12 @@ export const GET_DEALS_OUTPUT = z
   .passthrough();
 
 export const GET_PRODUCT_OUTPUT = z
-  .object({ product: PRODUCT })
+  .object({ product: PRODUCT, ...PRICE_SCOPE_FIELDS })
   .passthrough();
 
 export const RECOMMEND_ALTERNATIVES_OUTPUT = z
   .object({
+    ...PRICE_SCOPE_FIELDS,
     source: PRODUCT,
     mode: z.enum(["cheaper", "better-specs", "same-brand"]).optional(),
     poolSource: z.enum(["alza-alternatives", "category-search"]),
@@ -358,6 +385,7 @@ export const RECOMMEND_ALTERNATIVES_OUTPUT = z
 
 export const COMPARE_PRODUCTS_OUTPUT = z
   .object({
+    ...PRICE_SCOPE_FIELDS,
     products: z.array(
       z
         .object({
@@ -366,6 +394,14 @@ export const COMPARE_PRODUCTS_OUTPUT = z
           name: z.string().optional(),
           url: z.string().optional(),
           error: z.string().optional(),
+          currency: z.string().optional(),
+          price: z.number().optional(),
+          originalPrice: z.number().optional(),
+          publicPrice: z.number().optional(),
+          priceNow: z.number().optional(),
+          promoCode: z.string().optional(),
+          alzaPlusPrice: z.number().optional(),
+          condition: z.enum(["opened", "used"]).optional(),
         })
         .passthrough(),
     ),
@@ -493,6 +529,7 @@ export const LIST_CATEGORY_FILTERS_OUTPUT = z
 const SPEC_VALUE = z.object({ value: z.unknown(), source: z.string(), raw: z.string() }).passthrough();
 export const PC_BUILD_OUTPUT = z
   .object({
+    ...PRICE_SCOPE_FIELDS,
     parts: z.array(
       z
         .object({

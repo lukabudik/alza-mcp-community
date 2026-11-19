@@ -6,7 +6,8 @@ import { MobileAccount } from "./domain/mobile-account.js";
 import { Pickup } from "./domain/pickup.js";
 import { Alternatives } from "./domain/alternatives.js";
 import { Reviews } from "./domain/reviews.js";
-import { AlzaBrowser } from "./infra/browser.js";
+import { AlzaBrowser, type SignInState } from "./infra/browser.js";
+import { loginCommand } from "./infra/web-session.js";
 import { AlzaRejectedError, AuthenticationError, ConfigurationError, NotFoundError, OutcomeUnknownError, UpstreamError, UserError, truncateInput } from "./infra/errors.js";
 import { log } from "./infra/logger.js";
 import { findProductPrompt } from "./prompts/find-product.js";
@@ -97,7 +98,8 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
   const autocomplete = new Autocomplete(mobileApi);
   const reviews = new Reviews(browser, catalog, mobileApi);
   const alternatives = new Alternatives(catalog, mobileApi);
-  const deps = { catalog, reviews, pickup, mobileAccount, alternatives, autocomplete };
+  const webSession = { status: (opts?: { check?: boolean }) => browser.webSessionStatus(opts), loginCommand: () => loginCommand() };
+  const deps = { catalog, reviews, pickup, mobileAccount, alternatives, autocomplete, webSession };
 
   const server = new McpServer(
     { name: "alza-mcp-community", title: "Alza (unofficial, community)", version: VERSION },
@@ -127,7 +129,7 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
   const recentErrors = new RecentErrors();
   const errorWrap = async (name: string, fn: () => Promise<ToolResult>): Promise<ToolResult> => {
     try {
-      return withSignedOutNote(name, await fn(), browser.webSessionExpired);
+      return withPriceScope(name, await fn(), browser.signInState);
     } catch (err) {
       const message = friendlyError(err);
       log.warn(`tool ${name} error`, { error: message });
@@ -202,16 +204,33 @@ export function buildServer(opts: BuildOptions = {}): BuildResult {
 const REPORT_HINT =
   "If this looks like a bug in alza-mcp-community or a change on Alza's side rather than a problem with the request, you can call `report_issue` to draft a GitHub issue — ask the user before filing it.";
 
-export const SIGNED_OUT_NOTE =
-  "Note: the saved alza.cz sign-in (`--login`) has expired, so the prices above are public prices, not this account's own. Tell the user, and ask them to run `alza-mcp-community --login` again to restore their prices.";
+/** Put first in a price result once the saved sign-in expired, so neither the agent nor the user can miss it. */
+export function signedOutNote(command = loginCommand()): string {
+  return (
+    "WARNING: the saved alza.cz sign-in (--login) has expired. Alza served these pages signed out, so every price in this result is the public price, not this account's own (signedIn: false, priceScope: \"public\"). " +
+    `Tell the user, and ask them to sign in again by running \`${command}\` in a terminal; their own prices come back on the next call.`
+  );
+}
 
 /** Tools whose prices come from catalog pages, so a signed-in web session changes them (cached answers included). */
 const WEB_PRICED_TOOLS = new Set(["search_products", "get_product", "compare_products", "get_deals", "recommend_alternatives", "pc_build_check", "pc_build_suggest"]);
 
-/** Append SIGNED_OUT_NOTE to a price-bearing result while the `--login` session is expired. */
-export function withSignedOutNote(tool: string, res: ToolResult, sessionExpired: boolean): ToolResult {
-  if (!sessionExpired || res.isError || !WEB_PRICED_TOOLS.has(tool)) return res;
-  return { ...res, content: [...res.content, { type: "text", text: SIGNED_OUT_NOTE }] };
+/**
+ * Say whose prices a catalog-priced result carries while a `--login` session is
+ * in use: `signedIn` + `priceScope` in structuredContent (a client that shows
+ * the model only structured output must not lose it) and, once the sign-in has
+ * expired, `loginCommand` plus a warning put first in the text. Cached answers
+ * get the current state too. An anonymous catalog (no session) is left alone.
+ */
+export function withPriceScope(tool: string, res: ToolResult, signIn: SignInState | undefined, command = loginCommand()): ToolResult {
+  if (!signIn || res.isError || !WEB_PRICED_TOOLS.has(tool)) return res;
+  const signedIn = signIn === "signed_in";
+  const scope = signedIn ? { signedIn, priceScope: "account" } : { signedIn, priceScope: "public", loginCommand: command };
+  return {
+    ...res,
+    content: signedIn ? res.content : [{ type: "text", text: signedOutNote(command) }, ...res.content],
+    ...(res.structuredContent ? { structuredContent: { ...res.structuredContent, ...scope } } : {}),
+  };
 }
 
 /** Errors caused by the request itself: no point asking the maintainers about them. */

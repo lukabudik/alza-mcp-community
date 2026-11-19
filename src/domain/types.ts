@@ -8,8 +8,18 @@ export interface Product {
   image?: string;
   /** Price as a number in the locale's currency. */
   price?: number;
-  /** Original / strike-through price, if discounted. */
+  /**
+   * Older reference price from the price box: the crossed-out price, or price
+   * + "Ušetříte" savings. For a signed-in account with its own prices the
+   * crossed-out price is usually the public price.
+   */
   originalPrice?: number;
+  /**
+   * `get_product` only, signed in: the price a visitor who is not signed in
+   * pays, when it differs from `price` (this account's price). From Alza's
+   * price-explanation dialog.
+   */
+  publicPrice?: number;
   /**
    * Lowest price a buyer can pay without a membership, when the listing card
    * carries a promo code ("Kúpiť s kódom ALZADNI15"): `price` is then the shelf

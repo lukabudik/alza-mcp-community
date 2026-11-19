@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="cs"><head>
+<!--
+  Price-box markup for test/signed-in-prices.test.ts: the alza.cz product page's main
+  price box and a listing card's price box for a signed-in account with its own price,
+  structure as served on 2026-11-19 (classes, data attributes, nesting). The product,
+  its name and every amount are made up: 800,- is the account's price, 1 000,- the
+  public price. JSON-LD carries the public price, as it did on 2026-11-18.
+-->
+<title>Example Wireless Headset - Alza.cz</title>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Product","name":"Example Wireless Headset","sku":"TEST0001","brand":{"@type":"Brand","name":"Example"},
+ "offers":{"@type":"Offer","url":"https://www.alza.cz/example-wireless-headset-d10000001.htm","availability":"https://schema.org/InStock","price":1000,"priceCurrency":"CZK"}}
+</script>
+</head><body>
+<h1>Example Wireless Headset</h1>
+<div class="price-detail__row">
+  <div class="price-detail__price-box-wrapper js-price-detail__main-price-box-wrapper" data-testid="price-primary">
+    <span class="ads-pb js-price-box ads-pb--new ads-pb--basic ads-pb--big price-box--with-hover" data-slot="pb-wrapper" data-api-url="https://webapi.alza.cz/api/commodity/v1/10000001/explanationPrice/dialog?country=CZ" data-hover="true">
+      <span data-slot="pb-inner">
+        <span class="ads-pb__header" data-slot="pb-title"><span>Novinka</span></span>
+        <span class="ads-pb__body" data-slot="pb-price-wrapper">
+          <span class="ads-pb__price" data-slot="pb-price">
+            <span class="ads-pb__price-value js-price-box__primary-price__value">800,-</span>
+          </span>
+          <span class="ads-pb__original-price ads-pb__original-price--strike js-compare-price">1&nbsp;000,-</span>
+        </span>
+      </span>
+      <div class="ads-pb__footer" data-slot="pb-footer"><div><span class="js-secondary-price">bez DPH&nbsp;661,-</span></div></div>
+    </span>
+    <div class="price-guarantee js-price-guarantee" role="button" tabindex="0"><span>Garance nejlepší ceny</span></div>
+  </div>
+</div>
+<div class="av-container availability"><span data-testid="product-availability-availabilityText">Skladem &gt; 5 ks</span></div>
+
+<!-- Listing card of the same product, as search_products reads it. -->
+<div class="box browsingitem js-box canBuy" data-code="TEST0001" data-id="10000001">
+  <a class="name browsinglink" href="/example-wireless-headset-d10000001.htm">Example Wireless Headset</a>
+  <span class="ads-pb js-price-box ads-pb--new ads-pb--basic ads-pb--medium ads-pb--align-left" data-slot="pb-wrapper">
+    <span data-slot="pb-inner">
+      <span class="ads-pb__header" data-slot="pb-title"><span>Novinka</span></span>
+      <span class="ads-pb__body" data-slot="pb-price-wrapper">
+        <span class="ads-pb__price" data-slot="pb-price">
+          <span class="ads-pb__price-value js-price-box__primary-price__value">800,-</span>
+        </span>
+        <span class="ads-pb__original-price ads-pb__original-price--strike js-compare-price">1&nbsp;000,-</span>
+      </span>
+    </span>
+    <div class="ads-pb__footer" data-slot="pb-footer"><span>bez DPH&nbsp;661,-</span></div>
+  </span>
+  <div class="avlVal">Skladem &gt; 5 ks</div>
+  <button class="btnk1">Do košíku</button>
+</div>
+</body></html>

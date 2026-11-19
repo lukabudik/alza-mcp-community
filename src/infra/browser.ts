@@ -5,7 +5,7 @@ import { chromium, type Browser, type BrowserContext, type BrowserContextOptions
 import { CloudflareChallengeError, UpstreamError } from "./errors.js";
 import { cultureOf, resolveLocale, type Locale } from "./locale.js";
 import { log } from "./logger.js";
-import { loadWebSession, webSessionFile, writeBackWebSession, type WebSessionState } from "./web-session.js";
+import { loadWebSession, webSessionFile, webSessionMtime, writeBackWebSession, type WebSessionState } from "./web-session.js";
 
 const require = createRequire(import.meta.url);
 
@@ -59,6 +59,26 @@ export async function assertPageOk(res: Response | null | undefined, page: Page)
   }
 }
 
+/** What Alza's pages last reported for the saved `--login` session. */
+export type SignInState = "signed_in" | "signed_out";
+
+/** The saved web session as `account_status` reports it. */
+export interface WebSessionStatus {
+  /**
+   * "disabled": no session file is used (ALZA_WEB_SESSION_FILE=none, or HTTP without
+   * ALZA_HTTP_ALLOW_WEB_SESSION); "absent": no file yet (`--login` never ran);
+   * "unreadable": the file is not a storage state; "unknown": not checked yet;
+   * "signed_in" / "signed_out": what Alza's pages reported for it.
+   */
+  state: "disabled" | "absent" | "unreadable" | "unknown" | SignInState;
+  /** When the file was last written (`--login`, or cookies saved back). */
+  savedAt?: string;
+  /** When Alza last reported the state above. */
+  checkedAt?: string;
+  /** Why a requested check could not run (e.g. a Cloudflare challenge). */
+  checkError?: string;
+}
+
 export interface BrowserOptions {
   baseUrl?: string;
   /** Connect to an existing Chrome via CDP instead of launching Chromium. */
@@ -95,7 +115,15 @@ export class AlzaBrowser {
   private readonly webSessionFile?: string;
   /** mtime of the session file the current context was created from; undefined for an anonymous context. */
   private webSessionMtimeMs?: number;
-  private expired = false;
+  /**
+   * Last sign-in state Alza reported, for the session file version
+   * `signInVersionMs`. Survives idle shutdowns (cached results are still
+   * annotated with it) and is forgotten when `--login` writes a new file.
+   */
+  private signIn?: SignInState;
+  private signInCheckedAt?: number;
+  private signInVersionMs?: number;
+  private readonly signInListeners = new Set<() => void>();
 
   private launching?: Promise<Browser>;
   private browser?: Browser;
@@ -128,7 +156,50 @@ export class AlzaBrowser {
    * sign-in expired or was revoked): catalog prices are then public prices.
    */
   get webSessionExpired(): boolean {
-    return this.expired;
+    return this.signInState === "signed_out";
+  }
+
+  /** Last state Alza reported for the saved session; undefined without a session or before the first page. */
+  get signInState(): SignInState | undefined {
+    return this.signInVersionMs === undefined ? undefined : this.signIn;
+  }
+
+  /**
+   * Called whenever the price scope may have changed (signed in or out, or a
+   * new `--login`), so caches of catalog prices can be dropped.
+   */
+  onSignInChange(listener: () => void): void {
+    this.signInListeners.add(listener);
+  }
+
+  /**
+   * The saved web session's state. With `check`, a session whose state is
+   * not known yet is checked by loading the storefront home page.
+   */
+  async webSessionStatus(opts: { check?: boolean } = {}): Promise<WebSessionStatus> {
+    if (!this.webSessionFile) return { state: "disabled" };
+    let savedMs = webSessionMtime(this.webSessionFile);
+    if (savedMs === undefined) return { state: "absent" };
+    if (!loadWebSession(this.webSessionFile)) return { state: "unreadable", savedAt: new Date(savedMs).toISOString() };
+    let checkError: string | undefined;
+    if (opts.check && (this.signInVersionMs !== savedMs || !this.signIn)) {
+      try {
+        await this.withPage(async (page) => {
+          const res = await page.goto(`${this.baseUrl}/`, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+          await assertPageOk(res, page);
+        });
+      } catch (err) {
+        checkError = (err as Error)?.message ?? String(err);
+      }
+      savedMs = webSessionMtime(this.webSessionFile) ?? savedMs;
+    }
+    const known = this.signInVersionMs === savedMs ? this.signIn : undefined;
+    return {
+      state: known ?? "unknown",
+      savedAt: new Date(savedMs).toISOString(),
+      ...(known && this.signInCheckedAt ? { checkedAt: new Date(this.signInCheckedAt).toISOString() } : {}),
+      ...(checkError ? { checkError } : {}),
+    };
   }
 
   /**
@@ -139,6 +210,7 @@ export class AlzaBrowser {
     if (this.closed) throw new Error("browser closed");
 
     this.cancelIdleTimer();
+    if (this.inFlight === 0) this.dropReplacedSession();
     this.inFlight++;
     let page: Page | undefined;
     try {
@@ -219,21 +291,61 @@ export class AlzaBrowser {
       return;
     }
     if (state !== "logged_in" && state !== "logged_out") return;
-    const expired = state === "logged_out";
-    if (expired && !this.expired) {
+    const next: SignInState = state === "logged_in" ? "signed_in" : "signed_out";
+    this.signInCheckedAt = Date.now();
+    if (next === this.signIn) return;
+    if (next === "signed_out") {
       log.warn("web-session: Alza served the page signed out; the --login session has expired, prices are public", { file: this.webSessionFile });
+    } else if (this.signIn === "signed_out") {
+      log.info("web-session: Alza serves the pages signed in again");
     }
-    this.expired = expired;
+    this.signIn = next;
+    this.notifySignInChange();
   }
 
-  /** Persist cookies Alza refreshed during this context's life, so the sign-in does not age out. */
+  private notifySignInChange(): void {
+    for (const listener of this.signInListeners) listener();
+  }
+
+  /**
+   * `--login` wrote a new session file (or it was deleted) while a context
+   * built from the old one is open: drop the context, so the next page uses
+   * the new file instead of waiting for the idle shutdown. Only called with no
+   * page in flight, and synchronous so a `close()` right after `withPage` still
+   * wins. Not saved back: the file it came from is gone.
+   */
+  private dropReplacedSession(): void {
+    if (!this.context || !this.webSessionFile) return;
+    if (webSessionMtime(this.webSessionFile) === this.webSessionMtimeMs) return;
+    log.info("alza-browser: the web session file changed, reopening the browser context");
+    const ctx = this.context;
+    this.context = undefined;
+    this.contextPromise = undefined;
+    this.contextGeneration++;
+    this.webSessionMtimeMs = undefined;
+    void ctx.close().catch(() => {});
+  }
+
+  /**
+   * Persist cookies Alza refreshed during this context's life, so the sign-in
+   * does not age out. Not once Alza served the session signed out: those
+   * cookies sign nobody in, and writing them would make a dead session file
+   * look freshly saved (and could overwrite one that only failed briefly).
+   */
   private async saveWebSession(ctx: BrowserContext | undefined): Promise<void> {
     const mtimeMs = this.webSessionMtimeMs;
     this.webSessionMtimeMs = undefined;
     if (!ctx || !this.webSessionFile || mtimeMs === undefined) return;
+    if (this.signInVersionMs === mtimeMs && this.signIn === "signed_out") {
+      log.info("web-session: not saving the cookies of a signed-out session", { file: this.webSessionFile });
+      return;
+    }
     try {
       const state = (await ctx.storageState()) as WebSessionState;
-      writeBackWebSession(this.webSessionFile, mtimeMs, state);
+      // Our own write must not look like a new `--login` to the sign-in state.
+      if (writeBackWebSession(this.webSessionFile, mtimeMs, state) && this.signInVersionMs === mtimeMs) {
+        this.signInVersionMs = webSessionMtime(this.webSessionFile);
+      }
     } catch (err) {
       log.warn("web-session: could not save refreshed cookies", { error: (err as Error)?.message });
     }
@@ -297,7 +409,13 @@ export class AlzaBrowser {
     }
     this.context = context;
     this.webSessionMtimeMs = session?.mtimeMs;
-    this.expired = false;
+    if (session?.mtimeMs !== this.signInVersionMs) {
+      // A new `--login` (or none any more): what Alza said about the old file no longer applies.
+      this.signInVersionMs = session?.mtimeMs;
+      this.signIn = undefined;
+      this.signInCheckedAt = undefined;
+      this.notifySignInChange();
+    }
     if (session) log.info("alza-browser: catalog pages load signed in", { file: this.webSessionFile });
     return context;
   }

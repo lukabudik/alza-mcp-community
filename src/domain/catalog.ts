@@ -6,7 +6,7 @@ import { extractJsonLd, findProduct as findJsonLdProduct } from "../infra/jsonld
 import { raceDeadline, TOOL_BUDGET_MS } from "../infra/deadline.js";
 import { log } from "../infra/logger.js";
 import type { AppliedRange, Category, CategoryFilters, FacetGroup, FacetValue, Product, ProductParam, SearchResult } from "./types.js";
-import { compareDeals, DEFAULT_DEAL_CATEGORIES, jsonLdPriceText, parseDealCard, payablePrices, type Deal } from "./deals.js";
+import { compareDeals, DEFAULT_DEAL_CATEGORIES, jsonLdPriceText, parseDealCard, parsePriceExplanation, payablePrices, shelfPrices, type Deal } from "./deals.js";
 import { availabilityFields, normalizeAvailability } from "./availability.js";
 import { commodityIdFromUrl } from "./reviews.js";
 
@@ -89,6 +89,28 @@ interface RawCard {
 }
 
 /**
+ * Reads one `.ads-pb` price box (or any root holding one). Listing cards and the
+ * product page's main price box are the same component (live 2026-11-19):
+ * `.ads-pb__price-value` is the price the visitor pays (for a signed-in account
+ * with its own prices, that account's price), `.ads-pb__original-price--strike`
+ * the crossed-out price (then the public one), `.ads-pb__original-price`
+ * without `--strike` a savings amount. See deals.ts for the card variants.
+ */
+export const PRICE_BOX_FN = `function(box) {
+  function t(sel) {
+    var el = box ? box.querySelector(sel) : null;
+    return el ? el.textContent.trim().replace(/\\s+/g, ' ') : null;
+  }
+  return {
+    priceText: t('.ads-pb__price-value'),
+    originalPriceText: t('.ads-pb__original-price'),
+    originalIsStrike: !!(box && box.querySelector('.ads-pb__original-price--strike')),
+    badgeText: t('.ads-pb__header') || null,
+    monthlyText: t('.ads-pb__footer') || null
+  };
+}`;
+
+/**
  * Card extractor as a function source taking a query root, so it runs both
  * against the live page (`document`) and against the `Boxes` HTML returned
  * by the category page's own `EShopService.svc/Filter` call (parsed with
@@ -147,6 +169,7 @@ export const CARD_EXTRACTOR_FN = `function(root) {
       return /AlzaPlus\\+/.test(t) && /Bez člen/.test(t);
     });
     var memberEl = memberEls.length ? memberEls[memberEls.length - 1] : null;
+    var box = (${PRICE_BOX_FN})(card);
     return {
       code: card.getAttribute('data-code'),
       id: card.getAttribute('data-id'),
@@ -154,9 +177,9 @@ export const CARD_EXTRACTOR_FN = `function(root) {
       name: txt('a.name') || txt('.name'),
       url: attr('a.name', 'href') || attr('a[href*=".htm"]', 'href'),
       image: attr('img', 'src') || attr('img', 'data-src'),
-      priceText: txt('.ads-pb__price-value') || txt('.price'),
-      originalPriceText: txt('.ads-pb__original-price'),
-      originalIsStrike: !!card.querySelector('.ads-pb__original-price--strike'),
+      priceText: box.priceText || txt('.price'),
+      originalPriceText: box.originalPriceText,
+      originalIsStrike: box.originalIsStrike,
       ratingText: ariaMatch ? ariaMatch[1] : (ratingMatch ? ratingMatch[1] : null),
       reviewCountText: ratingMatch ? ratingMatch[2].replace(/\\s|\\u00a0/g, '') : null,
       inStock: inStock,
@@ -164,8 +187,8 @@ export const CARD_EXTRACTOR_FN = `function(root) {
       couponPriceText: couponPriceText,
       alzaPlusPriceText: alzaPlusPriceText,
       memberText: memberEl ? memberEl.textContent.trim().replace(/\\s+/g, ' ') : null,
-      badgeText: txt('.ads-pb__header') || null,
-      monthlyText: txt('.ads-pb__footer') || null,
+      badgeText: box.badgeText,
+      monthlyText: box.monthlyText,
       availabilityText: txt('.avlVal') || null
     };
   });
@@ -270,7 +293,16 @@ export const PRODUCT_PAGE_EXTRACTOR = `(function() {
     // next to the shelf price box. Server-rendered on the product page.
     promoCode: (function() { var e = document.querySelector('.promo-action-prices__discount-code'); return e ? (e.textContent || '').trim() || null : null; })(),
     promoPriceText: (function() { var e = document.querySelector('.promo-action-prices__price'); return e ? (e.textContent || '').replace(/\\s+/g, ' ').trim() || null : null; })(),
-    shelfPriceText: (function() { var e = document.querySelector('.js-price-box__primary-price__value'); return e ? (e.textContent || '').replace(/\\s+/g, ' ').trim() || null : null; })(),
+    // The main price box: what this visitor pays. JSON-LD offers.price is not
+    // trusted for that, it carried the public price for a signed-in account
+    // (2026-11-18, MSAaS6d1).
+    priceBox: (${PRICE_BOX_FN})(document.querySelector('[data-testid="price-primary"] .js-price-box') || document.querySelector('.js-price-box')),
+    // "Why this price" dialog behind a signed-in account's own price (see Catalog.publicPriceOf).
+    priceExplanationUrl: (function() {
+      var e = document.querySelector('[data-testid="price-primary"] .js-price-box[data-api-url]');
+      var u = e ? e.getAttribute('data-api-url') || '' : '';
+      return /\\/explanationPrice\\//.test(u) ? u : null;
+    })(),
     params: Array.from(document.querySelectorAll('.paramTbl tr, table.paramTbl tr, .productSpecBox tr')).slice(0, ${PRODUCT_PARAMS_SCRAPE_CAP}).map(function(tr) {
       var th = tr.querySelector('th'), td = tr.querySelector('td');
       return { name: th ? th.textContent.trim().replace(/\\s+/g,' ') : '', value: td ? td.textContent.trim().replace(/\\s+/g,' ') : '' };
@@ -292,7 +324,16 @@ export class Catalog {
   /** Listing pages already read by `get_deals`, so a retry after a time-budget cut-off only loads what is missing. */
   private readonly dealPageCache = new TtlCache<string, { cards: RawCard[]; pageUrls: Record<string, string> }>(5 * 60 * 1000);
 
-  constructor(private readonly browser: AlzaBrowser) {}
+  constructor(private readonly browser: AlzaBrowser) {
+    // Cached prices belong to the price scope they were read in: a sign-in that
+    // expired, or a new `--login`, makes them the wrong prices.
+    browser.onSignInChange?.(() => {
+      this.searchCache.clear();
+      this.productCache.clear();
+      this.dealsCache.clear();
+      this.dealPageCache.clear();
+    });
+  }
 
   async searchProducts(opts: SearchOptions): Promise<SearchResult> {
     const hasAttrFilters = (opts.producerIds && opts.producerIds.length > 0) || (opts.filters && opts.filters.length > 0);
@@ -876,30 +917,9 @@ export class Catalog {
       const url = await this.resolveProductUrl(trimmed);
       log.debug("catalog.getProduct", { code: trimmed, url });
 
-      const data = await this.browser.withPage(async (p) => {
-        const res = await p.goto(url, { waitUntil: "commit", timeout: 30_000 });
-        await assertPageOk(res, p);
-        await p.waitForLoadState("load", { timeout: 30_000 }).catch(() => {});
-        let first = (await p.evaluate(PRODUCT_PAGE_EXTRACTOR)) as ProductPageData;
-        // .av-container is a client-rendered React component: at "load" it is
-        // often still empty (live 2026-10-08), and the JSON-LD fallback then
-        // reports InStock for on-order items. Give it a moment to render.
-        if (first.product && !first.availabilityText) {
-          const ok = await p
-            .waitForSelector('[data-testid*="availability-availabilityText"]', { timeout: 5_000 })
-            .then(() => true)
-            .catch(() => false);
-          if (ok) first = (await p.evaluate(PRODUCT_PAGE_EXTRACTOR)) as ProductPageData;
-        }
-        // Render race (live 2026-10-06, PSU AAnagp2a4): the spec table can be
-        // missing at "load" and the result would then sit in the cache with no
-        // params. When neither spec source has rows, wait briefly for the table
-        // and read the page once more. Only pages without specs pay for this.
-        if (first.product && first.params.length === 0 && pickAdditionalProperties(first.product.additionalProperty).length === 0) {
-          await p.waitForSelector(".paramTbl tr, .productSpecBox tr", { timeout: 4_000 }).catch(() => null);
-          return (await p.evaluate(PRODUCT_PAGE_EXTRACTOR)) as ProductPageData;
-        }
-        return first;
+      const { data, publicPrice } = await this.browser.withPage(async (p) => {
+        const page = await this.readProductPage(p, url);
+        return { data: page, publicPrice: await this.publicPriceOf(p, page) };
       });
 
       const ld = data.product;
@@ -920,6 +940,17 @@ export class Catalog {
       const extraParams = pickAdditionalProperties(ld.additionalProperty).filter((p) => !seenNames.has(p.name));
       const mergedParams = [...data.params, ...extraParams].slice(0, PRODUCT_PARAMS_SCRAPE_CAP);
 
+      // The visible price box is what this visitor pays; JSON-LD is the fallback
+      // for a page whose box did not render.
+      const box = {
+        priceText: data.priceBox?.priceText ?? jsonLdPriceText(offers.price),
+        originalPriceText: data.priceBox?.originalPriceText ?? null,
+        originalIsStrike: data.priceBox?.originalIsStrike ?? false,
+        availabilityText: data.availabilityText,
+      };
+      const shelf = shelfPrices(box);
+      const price = shelf.price ?? offers.price;
+
       return {
         code: ((ld.sku as string) ?? trimmed).trim(),
         // Numeric commodity id from the `-d<id>.htm` / `?dq=<id>` URL (same
@@ -929,16 +960,11 @@ export class Catalog {
         name: stripHtmlEntities(name),
         url: data.url,
         image: images[0],
-        price: offers.price,
+        price,
+        ...(shelf.originalPrice !== undefined ? { originalPrice: shelf.originalPrice } : {}),
+        ...(publicPrice !== undefined && price !== undefined && publicPrice !== price ? { publicPrice } : {}),
         currency: offers.priceCurrency ?? this.browser.locale.currency,
-        ...payablePrices({
-          availabilityText: data.availabilityText,
-          priceText: data.shelfPriceText ?? jsonLdPriceText(offers.price),
-          originalPriceText: null,
-          originalIsStrike: false,
-          couponCode: data.promoCode,
-          couponPriceText: data.promoPriceText,
-        }),
+        ...payablePrices({ ...box, couponCode: data.promoCode, couponPriceText: data.promoPriceText }),
         ...availabilityFields(data.availabilityText || offers.availability),
         ...jsonLdConflict(data.availabilityText, offers.availability),
         rating: rating.average,
@@ -947,6 +973,55 @@ export class Catalog {
         params: mergedParams.length > 0 ? mergedParams : undefined,
       };
     });
+  }
+
+  private async readProductPage(p: Page, url: string): Promise<ProductPageData> {
+    const res = await p.goto(url, { waitUntil: "commit", timeout: 30_000 });
+    await assertPageOk(res, p);
+    await p.waitForLoadState("load", { timeout: 30_000 }).catch(() => {});
+    let first = (await p.evaluate(PRODUCT_PAGE_EXTRACTOR)) as ProductPageData;
+    // .av-container is a client-rendered React component: at "load" it is
+    // often still empty (live 2026-10-08), and the JSON-LD fallback then
+    // reports InStock for on-order items. Give it a moment to render.
+    if (first.product && !first.availabilityText) {
+      const ok = await p
+        .waitForSelector('[data-testid*="availability-availabilityText"]', { timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (ok) first = (await p.evaluate(PRODUCT_PAGE_EXTRACTOR)) as ProductPageData;
+    }
+    // Render race (live 2026-10-06, PSU AAnagp2a4): the spec table can be
+    // missing at "load" and the result would then sit in the cache with no
+    // params. When neither spec source has rows, wait briefly for the table
+    // and read the page once more. Only pages without specs pay for this.
+    if (first.product && first.params.length === 0 && pickAdditionalProperties(first.product.additionalProperty).length === 0) {
+      await p.waitForSelector(".paramTbl tr, .productSpecBox tr", { timeout: 4_000 }).catch(() => null);
+      return (await p.evaluate(PRODUCT_PAGE_EXTRACTOR)) as ProductPageData;
+    }
+    return first;
+  }
+
+  /**
+   * Public price behind a signed-in account's own price. A signed-in account
+   * whose price differs from the public one gets a "why this price" dialog on
+   * the main price box (`data-api-url` = webapi.alza.cz
+   * /api/commodity/v1/{id}/explanationPrice/dialog, live 2026-11-19); its
+   * `eshopPriceInfo` is the price Alza shows a visitor who is not signed in.
+   * The crossed-out price in the box usually equals it but can also be an
+   * older price, so it is not used for this. Undefined when there is no
+   * dialog, the session is anonymous, or the call fails (best effort).
+   */
+  private async publicPriceOf(p: Page, data: ProductPageData): Promise<number | undefined> {
+    if (!data.priceExplanationUrl || !this.browser.webSessionLoaded) return undefined;
+    try {
+      const body = await p.evaluate(
+        `(function(u) { var c = new AbortController(); setTimeout(function() { c.abort(); }, 5000); return fetch(u, { credentials: "include", signal: c.signal, headers: { accept: "application/json" } }).then(function(r) { return r.ok ? r.json() : null; }); })(${JSON.stringify(data.priceExplanationUrl)})`
+      );
+      return parsePriceExplanation(body)?.publicPrice;
+    } catch (err) {
+      log.debug("catalog: price explanation unavailable", { error: (err as Error)?.message });
+      return undefined;
+    }
   }
 
   private readonly facetsCache = new TtlCache<number, CategoryFilters>(60 * 60 * 1000);
@@ -1104,6 +1179,7 @@ export class Catalog {
 
   private normalizeCard(c: RawCard): Product | null {
     if (!c.code || !c.name || !c.url) return null;
+    const { originalPrice } = shelfPrices(c);
     return {
       code: c.code,
       id: c.id ? Number(c.id) : 0,
@@ -1111,6 +1187,7 @@ export class Catalog {
       url: this.absUrl(c.url),
       image: c.image ?? undefined,
       price: parsePrice(c.priceText),
+      ...(originalPrice !== undefined ? { originalPrice } : {}),
       currency: this.browser.locale.currency,
       availability:
         c.inStock === null ? undefined : c.inStock ? "in stock" : "not purchasable now",
@@ -1134,7 +1211,8 @@ interface ProductPageData {
   availabilityText?: string | null;
   promoCode?: string | null;
   promoPriceText?: string | null;
-  shelfPriceText?: string | null;
+  priceBox?: Pick<RawCard, "priceText" | "originalPriceText" | "originalIsStrike"> | null;
+  priceExplanationUrl?: string | null;
   params: Array<{ name: string; value: string }>;
 }
 
