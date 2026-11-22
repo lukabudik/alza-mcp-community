@@ -14,6 +14,31 @@ function result(value: unknown): ToolResult {
   return jsonResult(value);
 }
 
+/**
+ * `account_status`'s view of the catalog's saved web session: its state, whose
+ * prices the catalog tools return because of it, and how to sign in again.
+ */
+async function webSessionReport(deps: ToolDeps): Promise<{ webSession?: Record<string, unknown> }> {
+  if (!deps.webSession) return {};
+  const s = await deps.webSession.status({ check: true });
+  const priceScope = s.state === "signed_in" ? "account" : s.state === "unknown" ? "unknown" : "public";
+  const notes: Partial<Record<typeof s.state, string>> = {
+    signed_out: "The saved alza.cz sign-in has expired: catalog tools return public prices, not this account's own. Ask the user to run loginCommand.",
+    absent: "No saved alza.cz sign-in: catalog tools return public prices. To see an account's own prices, the user runs loginCommand.",
+    unreadable: "The saved alza.cz sign-in file is unreadable: catalog tools return public prices. Ask the user to run loginCommand.",
+    unknown: "Could not tell whether the saved alza.cz sign-in still works; see checkError.",
+  };
+  const needsLogin = s.state === "signed_out" || s.state === "absent" || s.state === "unreadable";
+  return {
+    webSession: {
+      ...s,
+      priceScope,
+      ...(needsLogin ? { loginCommand: deps.webSession.loginCommand() } : {}),
+      ...(notes[s.state] ? { note: notes[s.state] } : {}),
+    },
+  };
+}
+
 const jsonObject = z.record(z.string(), z.unknown());
 
 /** Shared prerequisite sentence for token-scoped tools. */
@@ -201,17 +226,18 @@ export function createAccountTools(deps: ToolDeps): RegisterableTool[] {
       return server.registerTool(
         "account_status",
         {
-          title: "Check mobile API auth status",
+          title: "Check sign-in status (mobile API token and web session)",
           description:
             "Report whether a mobile API access token is loaded in this server process, and when it expires (`expiresAt`, `expired`) if that is known. An expired token is refreshed automatically before the next account call when a refresh token is loaded. " +
-            "Use as a first check before account-scoped tools (`cart`, `profile`, `order`, `add_to_cart`), or to diagnose \"not authenticated\" failures. " +
+            "Also reports `webSession`, the saved alza.cz web sign-in (`--login`) the catalog tools use for the account's own prices: `state` \"signed_in\", \"signed_out\" (expired: catalog prices are public; tell the user to run `loginCommand`), \"absent\" (never signed in; prices are public), \"unreadable\", \"disabled\" or \"unknown\". " +
+            "Use as a first check before account-scoped tools (`cart`, `profile`, `order`, `add_to_cart`), to diagnose \"not authenticated\" failures, or when catalog prices look like public prices. " +
             "If no token is loaded, run `auth_start`, have the user complete the browser sign-in, then `auth_exchange`. " +
-            "Read-only; no network call.",
+            "Read-only. No network call, except one alza.cz page load to check a saved web session whose state is not known yet.",
           inputSchema: {},
-          annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+          annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: true },
           outputSchema: OUTPUT_SCHEMAS["account_status"],
         },
-        async () => wrap("account_status", async () => result(apiAccount(deps).status())),
+        async () => wrap("account_status", async () => result({ ...apiAccount(deps).status(), ...(await webSessionReport(deps)) })),
       );
     },
   };

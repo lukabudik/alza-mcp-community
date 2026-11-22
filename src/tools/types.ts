@@ -5,6 +5,14 @@ import type { Pickup } from "../domain/pickup.js";
 import type { Autocomplete } from "../domain/autocomplete.js";
 import type { Alternatives } from "../domain/alternatives.js";
 import type { MobileAccount } from "../domain/mobile-account.js";
+import type { WebSessionStatus } from "../infra/browser.js";
+
+/** The catalog browser's saved `--login` session, for `account_status`. */
+export interface WebSessionProbe {
+  status(opts?: { check?: boolean }): Promise<WebSessionStatus>;
+  /** Command that signs in again (see web-session.ts `loginCommand`). */
+  loginCommand(): string;
+}
 
 export interface ToolDeps {
   catalog: Catalog;
@@ -13,6 +21,7 @@ export interface ToolDeps {
   mobileAccount: MobileAccount;
   autocomplete: Autocomplete;
   alternatives: Alternatives;
+  webSession?: WebSessionProbe;
 }
 
 export interface ToolResult {

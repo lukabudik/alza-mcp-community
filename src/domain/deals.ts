@@ -202,7 +202,7 @@ export function parseDealCard(card: RawDealCard, currency: string): DealPricing 
   }
 
   const badge = card.badgeText?.replace(/\s+/g, " ").trim().toUpperCase() || null;
-  const monthlyFrom = parseMoney(card.monthlyText) ?? null;
+  const monthlyFrom = monthlyAmount(card.monthlyText);
 
   return {
     price: priceList,
@@ -221,6 +221,48 @@ export function parseDealCard(card: RawDealCard, currency: string): DealPricing 
     newPrice,
     priceCheck,
   };
+}
+
+/**
+ * Instalment amount of a price-box footer ("Od 2,79 € mesačne"). The same footer
+ * slot carries the price without VAT ("bez DPH 661,-") on product pages and,
+ * for a signed-in account, on listing cards too (live 2026-11-19); that is not
+ * a monthly amount.
+ */
+export function monthlyAmount(raw: string | null | undefined): number | null {
+  if (!raw || /bez\s+DPH/i.test(raw)) return null;
+  return parseMoney(raw) ?? null;
+}
+
+/**
+ * Price and crossed-out price of one `.ads-pb` price box. Listing cards and
+ * the product page render the same component (live 2026-11-19), so search,
+ * deals and `get_product` read the price the visitor pays from the same place.
+ * For a signed-in account with its own prices the box shows that account's
+ * price, with the public price crossed out. `originalPrice` is absent for
+ * previously sold goods, whose "Nový N,-" figure is not a discount.
+ */
+export function shelfPrices(box: Pick<RawDealCard, "priceText" | "originalPriceText" | "originalIsStrike" | "availabilityText">): { price?: number; originalPrice?: number } {
+  const price = parseMoney(box.priceText);
+  if (price === undefined) return {};
+  const deal = conditionOf(box) ? undefined : computeDeal(box);
+  return deal ? { price, originalPrice: deal.originalPrice } : { price };
+}
+
+/**
+ * Public price from Alza's price-explanation dialog (webapi.alza.cz
+ * `/api/commodity/v1/{id}/explanationPrice/dialog`, live 2026-11-19): for a
+ * signed-in account with its own price, `alzaPriceInfo` is that account's price
+ * ("Vaše extra cena") and `eshopPriceInfo` the price for everyone else ("Cena
+ * Alza.cz"). Undefined when the body does not carry a usable public price.
+ */
+export function parsePriceExplanation(raw: unknown): { publicPrice: number } | undefined {
+  const tag = (raw as { eshopPriceInfo?: { priceInfoV3?: { mainPriceTag?: { primaryPriceNoCurrency?: unknown; primaryPrice?: unknown } } } } | null)
+    ?.eshopPriceInfo?.priceInfoV3?.mainPriceTag;
+  if (!tag) return undefined;
+  const n = typeof tag.primaryPriceNoCurrency === "number" ? tag.primaryPriceNoCurrency : undefined;
+  const publicPrice = n !== undefined && n > 0 ? round2(n) : parseMoney(typeof tag.primaryPrice === "string" ? tag.primaryPrice : null);
+  return publicPrice !== undefined ? { publicPrice } : undefined;
 }
 
 /**

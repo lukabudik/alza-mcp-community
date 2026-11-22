@@ -58,6 +58,7 @@ export function formatProduct(p: Product): string {
       line += ` (was ${formatPrice(p.originalPrice, p.currency)}, save ${formatPrice(save, p.currency)})`;
     }
     lines.push(line);
+    if (p.publicPrice !== undefined) lines.push(`Public price (not signed in): ${formatPrice(p.publicPrice, p.currency)}; the price above is this account's own price`);
   }
   if (p.priceNow !== undefined && p.promoCode) {
     lines.push(`Lowest price you can pay: **${formatPrice(p.priceNow, p.currency)}** with code ${p.promoCode}${p.promoPercent ? ` (-${p.promoPercent} %)` : ""}; the price above is the shelf price`);
