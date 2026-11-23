@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-11-23
+
 ### Added
 - `--login` and `ALZA_WEB_SESSION_FILE`: the catalog tools can browse signed in and return the prices Alza shows your account (company price lists, for example) instead of public prices. `--login` opens your installed Chrome or Edge, you sign in by hand, and the cookies are saved to `~/.alza-mcp/web-session.json` (mode 0600). Every catalog browser context starts from that file, and cookies Alza refreshes are written back on close unless a newer `--login` replaced the file. Opt-in: without the file nothing changes; `ALZA_WEB_SESSION_FILE=none` ignores it. Over HTTP it is loaded only with `ALZA_HTTP_ALLOW_WEB_SESSION=1`. When the sign-in expires, the server detects that Alza served a page signed out (`pv_user_details.user_login_state` in the page's data layer), logs a warning and appends a note to the results of the price tools (`search_products`, `get_product`, `compare_products`, `get_deals`, `recommend_alternatives`, `pc_build_*`) saying the prices are public and `--login` should be run again. Live-verified on alza.cz on 2026-11-02 with an account that has its own price list: signed-in searches and `get_product` returned that account's prices, lower than public for part of the products, and a session with its sign-in cookie removed was flagged as expired and got the note.
 
@@ -18,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The test suite runs on Windows: `browser-install` imports a `file://` URL instead of a bare `C:\` path, the setup-cf real run looks for `Scripts\python.exe`, the token-file mode check is POSIX-only like the one before it, and the two tests that need a POSIX shell are skipped there with the reason stated (#120).
 
 ### Changed
+- The live canary runs on `ubuntu-24.04` instead of `ubuntu-latest`. GitHub moved `ubuntu-latest` to Ubuntu 26.04, where Playwright `~1.59` cannot install `chromium-headless-shell`, so the canary had failed in its install step every day since 2026-11-08 without reaching Alza (#130).
 - Playwright is pinned to `~1.59.1` (patch updates only) instead of `^1.59.1`. The published package has no lockfile, so `npx`/`npm i` used to pick up every new Playwright minor, and a broken one could break our postinstall with no change on our side, as reported with 1.64.1 on Windows (#118). Newer minors are adopted on purpose, after CI on Linux and Windows.
 - CI also runs typecheck, tests and build on `windows-latest` (#120).
 

@@ -35,7 +35,7 @@ import { MobileApi } from "./infra/mobile-api.js";
 import { ImpersonateTransport, cfFetch } from "./infra/impersonate-transport.js";
 import type { ToolResult } from "./tools/types.js";
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.6.1";
 
 export interface BuildOptions {
   baseUrl?: string;

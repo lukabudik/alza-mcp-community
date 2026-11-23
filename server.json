@@ -6,12 +6,12 @@
     "url": "https://github.com/lukabudik/alza-mcp-community",
     "source": "github"
   },
-  "version": "0.6.0",
+  "version": "0.6.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "alza-mcp-community",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "transport": {
         "type": "stdio"
       }
