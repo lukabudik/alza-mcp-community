@@ -1,7 +1,7 @@
 {
   "name": "alza-mcp-community",
   "mcpName": "io.github.lukabudik/alza-mcp-community",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Unofficial Model Context Protocol server for Alza.cz — product search, details, reviews, and pickup points, plus the authenticated account, cart, checkout, order, and payment stack (mobile REST + legacy web WCF).",
   "type": "module",
   "main": "dist/index.js",

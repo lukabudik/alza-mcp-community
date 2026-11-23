@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "alza-mcp-community",
   "display_name": "Alza.cz (unofficial)",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Unofficial MCP server for Alza.cz: product search, details, reviews and pickup points. Account and checkout tools are off by default and token-guarded.",
   "long_description": "Unofficial, community-maintained. Not affiliated with Alza.cz. Catalog tools are read-only and need no login. Account, cart and checkout tools are disabled until you enable their toolset, and anything that mutates or spends money requires a one-time confirmation token. The .mcpb bundle does not run install scripts: the first browser-backed call downloads a headless Chromium (about 92 MB, about 30 s), and the optional curl_cffi helper venv is not created (run scripts/ensure-cf-venv.sh in the extension folder to add it).",
   "author": { "name": "Luka Budik", "url": "https://github.com/lukabudik" },
