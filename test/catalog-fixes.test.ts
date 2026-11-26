@@ -33,6 +33,13 @@ describe("parsePrice (#70)", () => {
     expect(parsePrice("1 299 €")).toBe(1299);
     expect(parsePrice("")).toBeUndefined();
   });
+
+  // Price text captured live from alza.hu/search.htm?exps=iPhone+16 on 2026-11-26 (whitespace runs collapsed).
+  it("parses alza.hu forint prices", () => {
+    expect(parsePrice("349\u00a0990\u00a0Ft")).toBe(349990);
+    expect(parsePrice("Szuper ár 359\u00a0990\u00a0Ft")).toBe(359990);
+    expect(parsePrice("-10\u00a0% az új árából 314\u00a0990\u00a0Ft")).toBe(314990);
+  });
 });
 
 describe("filterByPrice (#70)", () => {
