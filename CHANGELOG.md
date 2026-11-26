@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `search_products` on alza.hu returned no prices, so `min_price`/`max_price` excluded every product. `parsePrice` only accepted `,-`, `€` and `Kč` as the currency marker; it now also accepts `Ft` ("349 990 Ft").
+
 ## [0.6.1] — 2026-11-23
 
 ### Added

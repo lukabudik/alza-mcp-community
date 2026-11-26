@@ -1570,10 +1570,11 @@ function filterByScreenSize(p: Product, opts: SearchOptions): boolean {
 export function parsePrice(raw: string | null | undefined): number | undefined {
   if (!raw) return undefined;
   // Alza search cards show prices like "5 290,-" / "Super cena 4 399,- Ušetříte 91,-"
-  // (alza.cz) and "395,90 €" / "297 €" (alza.sk, live-verified 2026-10-07).
+  // (alza.cz), "395,90 €" / "297 €" (alza.sk, live-verified 2026-10-07) and
+  // "349 990 Ft" (alza.hu, live-verified 2026-11-26).
   // Take the first price-shaped number: digits with optional space-grouped
-  // thousands and optional decimals, followed by ",-", "€" or "Kč".
-  const m = raw.match(/(\d{1,3}(?:\s\d{3})+|\d+)(?:,(\d{1,2}))?\s*(?:,-|€|Kč)/);
+  // thousands and optional decimals, followed by ",-", "€", "Kč" or "Ft".
+  const m = raw.match(/(\d{1,3}(?:\s\d{3})+|\d+)(?:,(\d{1,2}))?\s*(?:,-|€|Kč|Ft\b)/);
   if (!m) return undefined;
   const n = Number(`${(m[1] ?? "").replace(/\s+/g, "")}${m[2] ? `.${m[2]}` : ""}`);
   return Number.isFinite(n) ? n : undefined;
